@@ -1,5 +1,14 @@
+import dns from 'dns';
 import mongoose from 'mongoose';
 import { config } from './config';
+
+// Ensure DNS SRV lookups and IPv4 resolution succeed across all environments
+try {
+  dns.setDefaultResultOrder('ipv4first');
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch {
+  // Ignore in environments where setting DNS servers is restricted
+}
 
 /**
  * Connect to MongoDB database (supports standalone & replica set)
