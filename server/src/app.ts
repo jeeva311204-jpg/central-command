@@ -50,6 +50,7 @@ app.use('/api/deliveries', deliveryRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/post-audits', postAuditRoutes);
 app.use('/api/capex', capexRoutes);
+app.use('/api/capex-dashboard', capexRoutes);
 app.use('/api/staff-performance', performanceRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/documents', documentRoutes);

@@ -40,6 +40,7 @@ export function Login() {
 
   const handleQuickLogin = async (demoEmail: string) => {
     setEmail(demoEmail);
+    setPassword('ChangeFlow2026!');
     setError('');
     setLoading(true);
     try {
