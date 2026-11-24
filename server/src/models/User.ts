@@ -11,6 +11,8 @@ export interface IUser extends Document {
   role?: IRole;
   departmentId?: mongoose.Types.ObjectId;
   department?: IDepartment;
+  managerId?: mongoose.Types.ObjectId;
+  manager?: IUser;
   phone?: string;
   isActive: boolean;
   deletedAt?: Date;
@@ -25,6 +27,7 @@ const UserSchema = new Schema<IUser>(
     passwordHash: { type: String, required: true },
     roleId: { type: Schema.Types.ObjectId, ref: 'Role', required: true, index: true },
     departmentId: { type: Schema.Types.ObjectId, ref: 'Department', index: true },
+    managerId: { type: Schema.Types.ObjectId, ref: 'User', index: true },
     phone: { type: String, trim: true },
     isActive: { type: Boolean, default: true, index: true },
     deletedAt: { type: Date, default: null },
@@ -47,6 +50,13 @@ UserSchema.virtual('role', {
 UserSchema.virtual('department', {
   ref: 'Department',
   localField: 'departmentId',
+  foreignField: '_id',
+  justOne: true,
+});
+
+UserSchema.virtual('manager', {
+  ref: 'User',
+  localField: 'managerId',
   foreignField: '_id',
   justOne: true,
 });

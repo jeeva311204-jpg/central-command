@@ -75,10 +75,11 @@ export async function ensureBaselineData(): Promise<void> {
       { name: 'Rahul Singh', email: 'operator1@changeflow.com', role: 'Employee', dept: 'PROD' },
     ];
 
+    const createdUsers: Record<string, any> = {};
     for (const u of usersData) {
       const roleDoc = rolesMap.get(u.role);
       const deptDoc = deptsMap.get(u.dept);
-      await User.findOneAndUpdate(
+      const created = await User.findOneAndUpdate(
         { email: u.email },
         {
           name: u.name,
@@ -90,6 +91,48 @@ export async function ensureBaselineData(): Promise<void> {
         },
         { upsert: true, new: true }
       );
+      createdUsers[u.email] = created;
+    }
+
+    // Set department managers (HODs)
+    const prodDept = deptsMap.get('PROD');
+    if (prodDept && createdUsers['hod.prod@changeflow.com']) {
+      prodDept.hodId = createdUsers['hod.prod@changeflow.com']._id;
+      await prodDept.save();
+
+      // Set staff under Rajesh Sharma (HOD PROD)
+      if (createdUsers['operator1@changeflow.com']) {
+        createdUsers['operator1@changeflow.com'].managerId = prodDept.hodId;
+        await createdUsers['operator1@changeflow.com'].save();
+      }
+      if (createdUsers['finance.lead@changeflow.com']) {
+        createdUsers['finance.lead@changeflow.com'].managerId = prodDept.hodId;
+        await createdUsers['finance.lead@changeflow.com'].save();
+      }
+    }
+
+    const engDept = deptsMap.get('ENG');
+    if (engDept && createdUsers['eng.tooling@changeflow.com']) {
+      engDept.hodId = createdUsers['eng.tooling@changeflow.com']._id;
+      await engDept.save();
+    }
+
+    const maintDept = deptsMap.get('MAINT');
+    if (maintDept && createdUsers['maint.lead@changeflow.com']) {
+      maintDept.hodId = createdUsers['maint.lead@changeflow.com']._id;
+      await maintDept.save();
+    }
+
+    const scmDept = deptsMap.get('SCM');
+    if (scmDept && createdUsers['procure.head@changeflow.com']) {
+      scmDept.hodId = createdUsers['procure.head@changeflow.com']._id;
+      await scmDept.save();
+    }
+
+    const qaDept = deptsMap.get('QA');
+    if (qaDept && createdUsers['qa.lead@changeflow.com']) {
+      qaDept.hodId = createdUsers['qa.lead@changeflow.com']._id;
+      await qaDept.save();
     }
 
     // 4. Default Proposal Types & Workflows

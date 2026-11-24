@@ -188,4 +188,30 @@ export const api = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+
+  // Organization & Hierarchy
+  getOrgTree: () => apiRequest<any>('/organization/tree'),
+  assignManager: (departmentId: string, userId: string) =>
+    apiRequest<any>('/organization/assign-manager', { method: 'POST', body: JSON.stringify({ departmentId, userId }) }),
+  assignStaff: (userId: string, departmentId: string, roleName?: string) =>
+    apiRequest<any>('/organization/assign-staff', { method: 'POST', body: JSON.stringify({ userId, departmentId, roleName }) }),
+
+  // Daily Role Checklists
+  getTodayChecklist: () => apiRequest<any>('/checklists/today'),
+  toggleChecklistItem: (itemId: string, completed?: boolean, note?: string) =>
+    apiRequest<any>('/checklists/toggle', { method: 'POST', body: JSON.stringify({ itemId, completed, note }) }),
+  getChecklistAnalytics: () => apiRequest<any>('/checklists/analytics'),
+
+  // Performance Warnings & Termination Letters
+  getPerformanceNotices: () => apiRequest<any[]>('/performance-notices'),
+  issuePerformanceNotice: (data: {
+    userId: string;
+    type: string;
+    severity?: string;
+    subject: string;
+    reason: string;
+    actionRequired?: string;
+  }) => apiRequest<any>('/performance-notices', { method: 'POST', body: JSON.stringify(data) }),
+  acknowledgePerformanceNotice: (id: string) =>
+    apiRequest<any>(`/performance-notices/${id}/acknowledge`, { method: 'POST' }),
 };

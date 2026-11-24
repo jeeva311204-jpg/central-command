@@ -23,3 +23,5 @@ export * from './Document';
 export * from './Notification';
 export * from './SimulatedEmail';
 export * from './AuditLog';
+export * from './PerformanceNotice';
+export * from './RoleChecklist';

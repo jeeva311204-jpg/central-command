@@ -21,6 +21,9 @@ import notificationRoutes from './routes/notifications';
 import documentRoutes from './routes/documents';
 import auditLogRoutes from './routes/auditLogs';
 import searchRoutes from './routes/search';
+import organizationRoutes from './routes/organization';
+import checklistRoutes from './routes/checklists';
+import performanceNoticeRoutes from './routes/performanceNotices';
 
 export const app = express();
 
@@ -52,6 +55,10 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/audit-logs', auditLogRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/organization', organizationRoutes);
+app.use('/api/checklists', checklistRoutes);
+app.use('/api/performance-notices', performanceNoticeRoutes);
+app.use('/api/performance/notices', performanceNoticeRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

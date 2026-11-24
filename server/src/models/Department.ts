@@ -26,4 +26,11 @@ const DepartmentSchema = new Schema<IDepartment>(
   }
 );
 
+DepartmentSchema.virtual('manager', {
+  ref: 'User',
+  localField: 'hodId',
+  foreignField: '_id',
+  justOne: true,
+});
+
 export const Department = mongoose.models.Department || mongoose.model<IDepartment>('Department', DepartmentSchema);
