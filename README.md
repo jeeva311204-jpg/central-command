@@ -93,24 +93,12 @@ SLA_CRON_SCHEDULE=0 * * * *
    MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.abcde.mongodb.net/changeflow?retryWrites=true&w=majority
    ```
 
-### 2. Seed Database
-```bash
-# Seed MongoDB with 5 departments, 10 users, budgets, 14 proposal types, 6 vendors, 8 proposals & assets
-npm run seed
-```
-
-### 3. Run the Platform
+### 2. Run the Platform
 ```bash
 # Concurrently starts both backend API (port 5000) and frontend (port 5173)
 npm run dev
 ```
 Open **[http://localhost:5173](http://localhost:5173)** in your browser.
-
-### 4. Run Test Suite
-```bash
-# Runs full test suite using mongodb-memory-server
-npm test
-```
 
 ---
 
