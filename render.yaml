@@ -3,7 +3,7 @@ services:
     name: changeflow-enterprise
     runtime: node
     plan: free
-    buildCommand: npm run install:all && npm run build
+    buildCommand: npm install --include=dev && npm --prefix server install --include=dev && npm --prefix client install --include=dev && npm run build
     startCommand: node server/dist/index.js
     envVars:
       - key: NODE_ENV
