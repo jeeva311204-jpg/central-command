@@ -75,8 +75,8 @@ export function Login() {
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-xl relative z-10 px-4">
-        <div className="bg-industrial-900 border border-industrial-800 rounded-2xl p-8 shadow-2xl space-y-6">
+      <div className="mt-6 sm:mt-8 sm:mx-auto sm:w-full sm:max-w-xl relative z-10 px-3 sm:px-4">
+        <div className="bg-industrial-900 border border-industrial-800 rounded-2xl p-4 sm:p-8 shadow-2xl space-y-5 sm:space-y-6">
           {error && (
             <div className="p-3 rounded-lg bg-rose-950/60 border border-rose-800 text-rose-300 text-xs font-semibold">
               {error}
@@ -130,7 +130,7 @@ export function Login() {
               <span className="text-[10px] text-industrial-500 font-mono">Password: ChangeFlow2026!</span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {demoAccounts.map((account) => (
                 <button
                   key={account.email}

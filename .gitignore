@@ -48,4 +48,6 @@ video_production/
 video_production_detailed/
 demo_captures/
 demo_captures_detailed/
+mobile_captures/
+test_mobile_captures.cjs
 check_db.cjs

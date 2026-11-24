@@ -1215,8 +1215,8 @@ export function Dashboard() {
       {/* MODAL 1: ISSUE PERFORMANCE NOTICE / WARNING LETTER        */}
       {/* ======================================================== */}
       {showNoticeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 rounded-2xl p-4 sm:p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-4 m-auto">
             <div className="flex items-center justify-between border-b border-industrial-200 dark:border-industrial-800 pb-3">
               <h3 className="text-base font-bold text-industrial-900 dark:text-white flex items-center gap-2">
                 <FileWarning className="w-5 h-5 text-rose-500" />
@@ -1333,8 +1333,8 @@ export function Dashboard() {
       {/* MODAL 2: ASSIGN DEPARTMENT MANAGER (HOD)                  */}
       {/* ======================================================== */}
       {showAssignManagerModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 rounded-2xl p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-4 m-auto">
             <div className="flex items-center justify-between border-b border-industrial-200 dark:border-industrial-800 pb-3">
               <h3 className="text-base font-bold text-industrial-900 dark:text-white flex items-center gap-2">
                 <Building className="w-5 h-5 text-brand-600" />
@@ -1414,8 +1414,8 @@ export function Dashboard() {
       {/* MODAL 3: ASSIGN STAFF TO DEPARTMENT & MANAGER             */}
       {/* ======================================================== */}
       {showAssignStaffModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 rounded-2xl p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-4 m-auto">
             <div className="flex items-center justify-between border-b border-industrial-200 dark:border-industrial-800 pb-3">
               <h3 className="text-base font-bold text-industrial-900 dark:text-white flex items-center gap-2">
                 <Users className="w-5 h-5 text-indigo-600" />
