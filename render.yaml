@@ -3,14 +3,14 @@ services:
     name: changeflow-enterprise
     runtime: node
     plan: free
-    buildCommand: npm run install:all && npm --prefix server run prisma:generate && npm --prefix server run prisma:push && npm run seed && npm run build
+    buildCommand: npm run install:all && npm run build
     startCommand: node server/dist/index.js
     envVars:
       - key: NODE_ENV
         value: production
       - key: JWT_SECRET
         generateValue: true
-      - key: DATABASE_URL
-        value: file:./server/prisma/dev.db
+      - key: MONGODB_URI
+        sync: false
       - key: SLA_CRON_SCHEDULE
         value: "0 * * * *"

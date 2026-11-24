@@ -90,7 +90,7 @@ export function Sidebar() {
           Industrial 4.0 Standard
         </div>
         <div className="text-[10px] text-industrial-400 font-mono mt-0.5">
-          Prisma SQLite • React 18 • Node 24
+          MongoDB Atlas • React 18 • Node 24
         </div>
       </div>
     </aside>
