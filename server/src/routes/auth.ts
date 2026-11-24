@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
-import { prisma } from '../db';
+import { User } from '../models/User';
+import { Role } from '../models/Role';
+import { Department } from '../models/Department';
 import { config } from '../config';
 import { authenticateToken, generateToken } from '../middleware/auth';
 import { validate, loginSchema } from '../middleware/validate';
@@ -22,10 +23,7 @@ const loginLimiter = rateLimit({
 router.post('/login', loginLimiter, validate(loginSchema), async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await prisma.user.findUnique({
-    where: { email },
-    include: { role: true, department: true },
-  });
+  const user = await User.findOne({ email }).populate('roleId').populate('departmentId');
 
   if (!user || !user.isActive) {
     return res.status(401).json({ error: 'Invalid email or password' });
@@ -36,17 +34,19 @@ router.post('/login', loginLimiter, validate(loginSchema), async (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
-  const token = generateToken(user);
+  const roleDoc: any = user.roleId;
+  const deptDoc: any = user.departmentId;
+  const token = generateToken({ id: user._id.toString(), role: roleDoc?.name });
 
   return res.json({
     token,
     user: {
-      id: user.id,
+      id: user._id.toString(),
       name: user.name,
       email: user.email,
-      role: user.role.name,
-      roleDescription: user.role.description,
-      department: user.department ? { id: user.department.id, name: user.department.name, code: user.department.code } : null,
+      role: roleDoc?.name,
+      roleDescription: roleDoc?.description,
+      department: deptDoc ? { id: deptDoc._id.toString(), name: deptDoc.name, code: deptDoc.code } : null,
       phone: user.phone,
     },
   });
@@ -55,26 +55,25 @@ router.post('/login', loginLimiter, validate(loginSchema), async (req, res) => {
 // Quick demo user switch (for live hackathon demo)
 router.post('/switch-demo-user', async (req, res) => {
   const { email } = req.body;
-  const user = await prisma.user.findUnique({
-    where: { email },
-    include: { role: true, department: true },
-  });
+  const user = await User.findOne({ email }).populate('roleId').populate('departmentId');
 
   if (!user) {
     return res.status(404).json({ error: 'Demo user not found' });
   }
 
-  const token = jwt.sign({ userId: user.id }, config.jwtSecret, { expiresIn: '7d' });
+  const roleDoc: any = user.roleId;
+  const deptDoc: any = user.departmentId;
+  const token = generateToken({ id: user._id.toString(), role: roleDoc?.name });
 
   return res.json({
     token,
     user: {
-      id: user.id,
+      id: user._id.toString(),
       name: user.name,
       email: user.email,
-      role: user.role.name,
-      roleDescription: user.role.description,
-      department: user.department ? { id: user.department.id, name: user.department.name, code: user.department.code } : null,
+      role: roleDoc?.name,
+      roleDescription: roleDoc?.description,
+      department: deptDoc ? { id: deptDoc._id.toString(), name: deptDoc.name, code: deptDoc.code } : null,
       phone: user.phone,
     },
   });
@@ -82,43 +81,45 @@ router.post('/switch-demo-user', async (req, res) => {
 
 // Get current user info
 router.get('/me', authenticateToken, async (req, res) => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.id },
-    include: { role: true, department: true },
-  });
+  const user = await User.findById(req.user!.id).populate('roleId').populate('departmentId');
 
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
 
+  const roleDoc: any = user.roleId;
+  const deptDoc: any = user.departmentId;
+
   return res.json({
-    id: user.id,
+    id: user._id.toString(),
     name: user.name,
     email: user.email,
-    role: user.role.name,
-    roleDescription: user.role.description,
-    department: user.department ? { id: user.department.id, name: user.department.name, code: user.department.code } : null,
+    role: roleDoc?.name,
+    roleDescription: roleDoc?.description,
+    department: deptDoc ? { id: deptDoc._id.toString(), name: deptDoc.name, code: deptDoc.code } : null,
     phone: user.phone,
   });
 });
 
 // List all demo users for instant role-switching in the UI
 router.get('/demo-users', async (req, res) => {
-  const users = await prisma.user.findMany({
-    where: { isActive: true },
-    include: { role: true, department: true },
-    orderBy: { role: { name: 'asc' } },
-  });
+  const users = await User.find({ isActive: true })
+    .populate('roleId')
+    .populate('departmentId');
 
   return res.json(
-    users.map(u => ({
-      id: u.id,
-      name: u.name,
-      email: u.email,
-      role: u.role.name,
-      department: u.department ? u.department.name : 'All Enterprise',
-      phone: u.phone,
-    }))
+    users.map((u) => {
+      const roleDoc: any = u.roleId;
+      const deptDoc: any = u.departmentId;
+      return {
+        id: u._id.toString(),
+        name: u.name,
+        email: u.email,
+        role: roleDoc?.name || 'Employee',
+        department: deptDoc ? deptDoc.name : 'All Enterprise',
+        phone: u.phone,
+      };
+    })
   );
 });
 

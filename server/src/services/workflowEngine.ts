@@ -1,4 +1,13 @@
-import { prisma } from '../db';
+import mongoose from 'mongoose';
+import { withTransaction } from '../db';
+import { Proposal, IProposal } from '../models/Proposal';
+import { ProposalVersion } from '../models/ProposalVersion';
+import { WorkflowTemplate, IWorkflowStage } from '../models/WorkflowTemplate';
+import { ApprovalAction } from '../models/ApprovalAction';
+import { Delegation } from '../models/Delegation';
+import { User } from '../models/User';
+import { Role } from '../models/Role';
+import { Budget } from '../models/Budget';
 import { logAudit } from './auditLogger';
 import { createNotification, sendSimulatedEmail } from './notificationService';
 
@@ -8,10 +17,6 @@ export interface StageFilterContext {
 
 /**
  * Filter stages applicable for the given amount based on configurable thresholds
- * Default business rules:
- * - <= 100,000 (1 Lakh): HOD only
- * - 100,000 - 1,000,000 (1L - 10L): HOD + Technical (Engineer) + Finance
- * - > 1,000,000 (> 10L): HOD + Technical (Engineer) + Finance + Procurement + Management
  */
 export function isStageApplicable(stage: {
   approverRole: string;
@@ -56,30 +61,33 @@ export function isStageApplicable(stage: {
 /**
  * Get ordered applicable stages for a proposal
  */
-export async function getApplicableStagesForProposal(proposalId: string) {
-  const proposal = await prisma.proposal.findUnique({
-    where: { id: proposalId },
-    include: {
-      proposalType: {
-        include: {
-          workflowTemplate: {
-            include: {
-              stages: {
-                orderBy: { stepOrder: 'asc' },
-              },
-            },
-          },
-        },
-      },
-    },
+export async function getApplicableStagesForProposal(proposalId: string): Promise<any[]> {
+  const proposal = await Proposal.findById(proposalId);
+  if (!proposal) return [];
+
+  const workflowTemplate = await WorkflowTemplate.findOne({
+    proposalTypeId: proposal.proposalTypeId,
   });
 
-  if (!proposal || !proposal.proposalType.workflowTemplate) {
+  if (!workflowTemplate || !workflowTemplate.stages) {
     return [];
   }
 
-  const allStages = proposal.proposalType.workflowTemplate.stages;
-  return allStages.filter(stage => isStageApplicable(stage, proposal.totalInvestment));
+  const allStages = [...workflowTemplate.stages].sort((a, b) => a.stepOrder - b.stepOrder);
+  return allStages
+    .filter((stage) => isStageApplicable(stage, proposal.totalInvestment))
+    .map((stage) => ({
+      id: stage._id ? stage._id.toString() : stage.id,
+      _id: stage._id,
+      stepOrder: stage.stepOrder,
+      name: stage.name,
+      approverRole: stage.approverRole,
+      slaDays: stage.slaDays,
+      minAmount: stage.minAmount,
+      maxAmount: stage.maxAmount,
+      conditionExpr: stage.conditionExpr,
+      checklistTemplateId: stage.checklistTemplateId,
+    }));
 }
 
 /**
@@ -90,36 +98,32 @@ export async function canUserApproveStage(userId: string, targetRole: string): P
   isDelegated: boolean;
   delegatorId?: string;
 }> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { role: true },
-  });
+  const user = await User.findById(userId).populate('roleId');
+  if (!user || !user.isActive) return { allowed: false, isDelegated: false };
 
-  if (!user) return { allowed: false, isDelegated: false };
+  const roleDoc: any = user.roleId;
+  const userRoleName = roleDoc?.name || '';
 
   // Admin or exact role match
-  if (user.role.name === 'Admin' || user.role.name.toLowerCase() === targetRole.toLowerCase()) {
+  if (userRoleName === 'Admin' || userRoleName.toLowerCase() === targetRole.toLowerCase()) {
     return { allowed: true, isDelegated: false };
   }
 
   // Check active delegations
   const now = new Date();
-  const activeDelegation = await prisma.delegation.findFirst({
-    where: {
-      delegateeId: userId,
-      role: { equals: targetRole },
-      isActive: true,
-      startDate: { lte: now },
-      endDate: { gte: now },
-    },
-    include: { delegator: true },
+  const activeDelegation = await Delegation.findOne({
+    delegateeId: user._id,
+    role: targetRole,
+    isActive: true,
+    startDate: { $lte: now },
+    endDate: { $gte: now },
   });
 
   if (activeDelegation) {
     return {
       allowed: true,
       isDelegated: true,
-      delegatorId: activeDelegation.delegatorId,
+      delegatorId: activeDelegation.delegatorId.toString(),
     };
   }
 
@@ -127,7 +131,7 @@ export async function canUserApproveStage(userId: string, targetRole: string): P
 }
 
 /**
- * Execute an approval action on a proposal
+ * Execute an approval action on a proposal inside an ACID transaction
  */
 export async function executeApprovalAction(params: {
   proposalId: string;
@@ -139,260 +143,151 @@ export async function executeApprovalAction(params: {
   expectedStageId?: string;
   ipAddress?: string;
 }) {
-  const { proposalId, userId, action, comments, checklistResponses, delegatedToId, expectedStageId, ipAddress } = params;
+  return await withTransaction(async (session) => {
+    const { proposalId, userId, action, comments, checklistResponses, delegatedToId, expectedStageId, ipAddress } = params;
 
-  const proposal = await prisma.proposal.findUnique({
-    where: { id: proposalId },
-    include: {
-      currentStage: true,
-      initiator: true,
-      department: true,
-    },
-  });
+    const query = Proposal.findById(proposalId);
+    if (session) query.session(session);
+    const proposal = await query.populate('departmentId').populate('initiatorId');
 
-  if (!proposal) {
-    throw new Error('Proposal not found');
-  }
+    if (!proposal) {
+      throw new Error('Proposal not found');
+    }
 
-  if (proposal.status !== 'IN_REVIEW' && proposal.status !== 'DRAFT') {
-    throw new Error(`Cannot perform action on proposal with status ${proposal.status}`);
-  }
+    if (proposal.status !== 'IN_REVIEW' && proposal.status !== 'DRAFT') {
+      throw new Error(`Cannot perform action on proposal with status ${proposal.status}`);
+    }
 
-  if (expectedStageId && proposal.currentStageId !== expectedStageId) {
-    throw new Error(`Concurrent modification detected: Proposal is no longer at stage ${expectedStageId}`);
-  }
+    if (expectedStageId && proposal.currentStageId && proposal.currentStageId.toString() !== expectedStageId) {
+      throw new Error(`Concurrent modification detected: Proposal is no longer at stage ${expectedStageId}`);
+    }
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { role: true },
-  });
+    const user = await User.findById(userId).populate('roleId');
+    if (!user) throw new Error('User not found');
 
-  if (!user) {
-    throw new Error('User not found');
-  }
-
-  const currentStage = proposal.currentStage;
-  if (!currentStage) {
-    throw new Error('Proposal has no active workflow stage');
-  }
-
-  // Check permission
-  const authCheck = await canUserApproveStage(userId, currentStage.approverRole);
-  if (!authCheck.allowed) {
-    throw new Error(`User does not have authorization to approve for role ${currentStage.approverRole}`);
-  }
-
-  const applicableStages = await getApplicableStagesForProposal(proposalId);
-  const currentStageIndex = applicableStages.findIndex(s => s.id === currentStage.id);
-
-  const beforeSnapshot = {
-    status: proposal.status,
-    currentStageId: proposal.currentStageId,
-    currentStageName: currentStage.name,
-  };
-
-  // 1. REJECT
-  if (action === 'REJECT') {
-    const updated = await prisma.proposal.update({
-      where: { id: proposalId },
-      data: {
-        status: 'REJECTED',
-      },
+    // Find current stage details from WorkflowTemplate
+    const workflowTemplate = await WorkflowTemplate.findOne({
+      proposalTypeId: proposal.proposalTypeId,
     });
+    const currentStage = workflowTemplate?.stages.find(
+      (s: any) => s._id.toString() === proposal.currentStageId?.toString()
+    );
 
-    await prisma.approvalAction.create({
-      data: {
-        proposalId,
-        stageId: currentStage.id,
+    if (!currentStage) {
+      throw new Error('Proposal has no active workflow stage');
+    }
+
+    // Check permission
+    const authCheck = await canUserApproveStage(userId, currentStage.approverRole);
+    if (!authCheck.allowed) {
+      throw new Error(`User does not have authorization to approve for role ${currentStage.approverRole}`);
+    }
+
+    const applicableStages = await getApplicableStagesForProposal(proposalId);
+    const currentStageIndex = applicableStages.findIndex(
+      (s) => s.id === currentStage._id.toString() || s._id?.toString() === currentStage._id.toString()
+    );
+
+    const beforeSnapshot = {
+      status: proposal.status,
+      currentStageId: proposal.currentStageId?.toString(),
+      currentStageName: currentStage.name,
+      __v: (proposal as any).__v,
+    };
+
+    // 1. REJECT
+    if (action === 'REJECT') {
+      proposal.status = 'REJECTED';
+      await proposal.save({ session });
+
+      const actionDoc = {
+        proposalId: proposal._id,
+        stageId: currentStage._id,
         stageName: currentStage.name,
-        approverId: userId,
+        approverId: user._id,
         action: 'REJECT',
         comments: comments || 'Proposal rejected by approver.',
-        checklistResponsesJson: checklistResponses ? JSON.stringify(checklistResponses) : null,
-      },
-    });
+        checklistResponses,
+      };
 
-    await logAudit({
-      userId,
-      userName: user.name,
-      entityType: 'PROPOSAL',
-      entityId: proposalId,
-      action: 'REJECT',
-      before: beforeSnapshot,
-      after: { status: 'REJECTED' },
-      ipAddress,
-    });
-
-    await createNotification(
-      proposal.initiatorId,
-      `Proposal ${proposal.proposalNumber} Rejected`,
-      `Your proposal "${proposal.title}" was rejected at ${currentStage.name} by ${user.name}. Reason: ${comments || 'No reason provided.'}`,
-      'APPROVAL',
-      `/proposals/${proposalId}`
-    );
-
-    await sendSimulatedEmail(
-      proposal.initiator.email,
-      proposal.initiator.name,
-      `[ChangeFlow] Proposal Rejected: ${proposal.proposalNumber}`,
-      `<p>Your proposal <strong>${proposal.proposalNumber} - ${proposal.title}</strong> has been rejected at stage <em>${currentStage.name}</em> by ${user.name}.</p><p>Comments: ${comments || 'None'}</p>`,
-      'APPROVAL_REQUEST'
-    );
-
-    return updated;
-  }
-
-  // 2. REQUEST_REVISION
-  if (action === 'REQUEST_REVISION') {
-    // Snapshot old version
-    const versionCount = await prisma.proposalVersion.count({ where: { proposalId } });
-    const fullSnapshot = await prisma.proposal.findUnique({
-      where: { id: proposalId },
-      include: { currentStage: true, department: true, initiator: true },
-    });
-
-    await prisma.proposalVersion.create({
-      data: {
-        proposalId,
-        versionNumber: versionCount + 1,
-        snapshotJson: JSON.stringify(fullSnapshot),
-        changedById: userId,
-        changeSummary: comments || `Revision requested at ${currentStage.name}`,
-      },
-    });
-
-    const updated = await prisma.proposal.update({
-      where: { id: proposalId },
-      data: {
-        status: 'REVISION_REQUESTED',
-      },
-    });
-
-    await prisma.approvalAction.create({
-      data: {
-        proposalId,
-        stageId: currentStage.id,
-        stageName: currentStage.name,
-        approverId: userId,
-        action: 'REQUEST_REVISION',
-        comments: comments || 'Revision requested.',
-        checklistResponsesJson: checklistResponses ? JSON.stringify(checklistResponses) : null,
-      },
-    });
-
-    await logAudit({
-      userId,
-      userName: user.name,
-      entityType: 'PROPOSAL',
-      entityId: proposalId,
-      action: 'REQUEST_REVISION',
-      before: beforeSnapshot,
-      after: { status: 'REVISION_REQUESTED', versionCreated: versionCount + 1 },
-      ipAddress,
-    });
-
-    await createNotification(
-      proposal.initiatorId,
-      `Revision Requested for ${proposal.proposalNumber}`,
-      `${user.name} requested changes at ${currentStage.name}: "${comments || 'Please revise and resubmit'}"`,
-      'APPROVAL',
-      `/proposals/${proposalId}/edit`
-    );
-
-    await sendSimulatedEmail(
-      proposal.initiator.email,
-      proposal.initiator.name,
-      `[ChangeFlow] Revision Requested: ${proposal.proposalNumber}`,
-      `<p>Revision has been requested for your proposal <strong>${proposal.proposalNumber}</strong> by ${user.name}.</p><p>Instructions: ${comments || 'Review and update required fields'}</p>`,
-      'REVISION_REQUEST'
-    );
-
-    return updated;
-  }
-
-  // 3. APPROVE
-  if (action === 'APPROVE') {
-    await prisma.approvalAction.create({
-      data: {
-        proposalId,
-        stageId: currentStage.id,
-        stageName: currentStage.name,
-        approverId: userId,
-        action: 'APPROVE',
-        comments: comments || 'Approved',
-        checklistResponsesJson: checklistResponses ? JSON.stringify(checklistResponses) : null,
-        delegatedToId: authCheck.isDelegated ? userId : null,
-      },
-    });
-
-    const nextStage = applicableStages[currentStageIndex + 1];
-
-    if (nextStage) {
-      // Advance to next stage
-      const updated = await prisma.proposal.update({
-        where: { id: proposalId },
-        data: {
-          currentStageId: nextStage.id,
-          status: 'IN_REVIEW',
-        },
-      });
+      if (session) {
+        await ApprovalAction.create([actionDoc], { session });
+      } else {
+        await ApprovalAction.create(actionDoc);
+      }
 
       await logAudit({
         userId,
         userName: user.name,
         entityType: 'PROPOSAL',
         entityId: proposalId,
-        action: 'APPROVE',
+        action: 'REJECT',
         before: beforeSnapshot,
-        after: { status: 'IN_REVIEW', currentStageId: nextStage.id, currentStageName: nextStage.name },
+        after: { status: 'REJECTED' },
         ipAddress,
+        session,
       });
 
-      // Notify approvers of next stage
-      const nextApprovers = await prisma.user.findMany({
-        where: {
-          role: { name: nextStage.approverRole },
-          isActive: true,
-        },
-      });
-
-      for (const approver of nextApprovers) {
+      const initiator: any = proposal.initiatorId;
+      if (initiator) {
         await createNotification(
-          approver.id,
-          `Action Required: ${proposal.proposalNumber}`,
-          `Proposal "${proposal.title}" (₹${proposal.totalInvestment.toLocaleString('en-IN')}) requires your approval at stage: ${nextStage.name}`,
+          initiator._id,
+          `Proposal ${proposal.proposalNumber} Rejected`,
+          `Your proposal "${proposal.title}" was rejected at ${currentStage.name} by ${user.name}. Reason: ${comments || 'No reason provided.'}`,
           'APPROVAL',
-          `/proposals/${proposalId}`
+          `/proposals/${proposalId}`,
+          session
         );
 
         await sendSimulatedEmail(
-          approver.email,
-          approver.name,
-          `[ChangeFlow Approval Required] ${proposal.proposalNumber} - ${nextStage.name}`,
-          `<p>Proposal <strong>${proposal.proposalNumber} - ${proposal.title}</strong> is pending your review as ${nextStage.approverRole}.</p><p>Total Value: ₹${proposal.totalInvestment.toLocaleString('en-IN')}</p>`,
-          'APPROVAL_REQUEST'
+          initiator.email,
+          initiator.name,
+          `[ChangeFlow] Proposal Rejected: ${proposal.proposalNumber}`,
+          `<p>Your proposal <strong>${proposal.proposalNumber} - ${proposal.title}</strong> has been rejected at stage <em>${currentStage.name}</em> by ${user.name}.</p><p>Comments: ${comments || 'None'}</p>`,
+          'APPROVAL_REQUEST',
+          session
         );
       }
 
-      return updated;
-    } else {
-      // Final approval reached!
-      const updated = await prisma.proposal.update({
-        where: { id: proposalId },
-        data: {
-          status: 'APPROVED',
-        },
-      });
+      return proposal;
+    }
 
-      // Update Department Budget utilisation
-      const budget = await prisma.budget.findFirst({
-        where: { departmentId: proposal.departmentId },
-      });
-      if (budget) {
-        await prisma.budget.update({
-          where: { id: budget.id },
-          data: { utilisedAmount: budget.utilisedAmount + proposal.totalInvestment },
-        });
+    // 2. REQUEST_REVISION
+    if (action === 'REQUEST_REVISION') {
+      const versionCount = await ProposalVersion.countDocuments({ proposalId: proposal._id });
+      const fullSnapshot = proposal.toObject ? proposal.toObject() : proposal;
+
+      const versionDoc = {
+        proposalId: proposal._id,
+        versionNumber: versionCount + 1,
+        snapshot: fullSnapshot,
+        changedById: user._id,
+        changeSummary: comments || `Revision requested at ${currentStage.name}`,
+      };
+
+      if (session) {
+        await ProposalVersion.create([versionDoc], { session });
+      } else {
+        await ProposalVersion.create(versionDoc);
+      }
+
+      proposal.status = 'REVISION_REQUESTED';
+      await proposal.save({ session });
+
+      const actionDoc = {
+        proposalId: proposal._id,
+        stageId: currentStage._id,
+        stageName: currentStage.name,
+        approverId: user._id,
+        action: 'REQUEST_REVISION',
+        comments: comments || 'Revision requested.',
+        checklistResponses,
+      };
+
+      if (session) {
+        await ApprovalAction.create([actionDoc], { session });
+      } else {
+        await ApprovalAction.create(actionDoc);
       }
 
       await logAudit({
@@ -400,129 +295,291 @@ export async function executeApprovalAction(params: {
         userName: user.name,
         entityType: 'PROPOSAL',
         entityId: proposalId,
-        action: 'APPROVE',
+        action: 'REQUEST_REVISION',
         before: beforeSnapshot,
-        after: { status: 'APPROVED', isFinalApproval: true },
+        after: { status: 'REVISION_REQUESTED', versionCreated: versionCount + 1 },
         ipAddress,
+        session,
+      });
+
+      const initiator: any = proposal.initiatorId;
+      if (initiator) {
+        await createNotification(
+          initiator._id,
+          `Revision Requested for ${proposal.proposalNumber}`,
+          `${user.name} requested changes at ${currentStage.name}: "${comments || 'Please revise and resubmit'}"`,
+          'APPROVAL',
+          `/proposals/${proposalId}`,
+          session
+        );
+
+        await sendSimulatedEmail(
+          initiator.email,
+          initiator.name,
+          `[ChangeFlow] Revision Requested: ${proposal.proposalNumber}`,
+          `<p>Revision has been requested for your proposal <strong>${proposal.proposalNumber}</strong> by ${user.name}.</p><p>Instructions: ${comments || 'Review and update required fields'}</p>`,
+          'REVISION_REQUEST',
+          session
+        );
+      }
+
+      return proposal;
+    }
+
+    // 3. APPROVE
+    if (action === 'APPROVE') {
+      const actionDoc = {
+        proposalId: proposal._id,
+        stageId: currentStage._id,
+        stageName: currentStage.name,
+        approverId: user._id,
+        action: 'APPROVE',
+        comments: comments || 'Approved',
+        checklistResponses,
+        delegatedToId: authCheck.isDelegated ? user._id : undefined,
+      };
+
+      if (session) {
+        await ApprovalAction.create([actionDoc], { session });
+      } else {
+        await ApprovalAction.create(actionDoc);
+      }
+
+      const nextStage = applicableStages[currentStageIndex + 1];
+
+      if (nextStage) {
+        // Advance to next stage
+        proposal.currentStageId = nextStage._id || new mongoose.Types.ObjectId(nextStage.id);
+        proposal.status = 'IN_REVIEW';
+        await proposal.save({ session });
+
+        await logAudit({
+          userId,
+          userName: user.name,
+          entityType: 'PROPOSAL',
+          entityId: proposalId,
+          action: 'APPROVE',
+          before: beforeSnapshot,
+          after: { status: 'IN_REVIEW', currentStageId: nextStage.id, currentStageName: nextStage.name },
+          ipAddress,
+          session,
+        });
+
+        // Find users with nextStage.approverRole
+        const targetRole = await Role.findOne({ name: nextStage.approverRole });
+        if (targetRole) {
+          const nextApprovers = await User.find({ roleId: targetRole._id, isActive: true });
+          for (const approver of nextApprovers) {
+            await createNotification(
+              approver._id,
+              `Action Required: ${proposal.proposalNumber}`,
+              `Proposal "${proposal.title}" (₹${proposal.totalInvestment.toLocaleString('en-IN')}) requires your approval at stage: ${nextStage.name}`,
+              'APPROVAL',
+              `/proposals/${proposalId}`,
+              session
+            );
+
+            await sendSimulatedEmail(
+              approver.email,
+              approver.name,
+              `[ChangeFlow Approval Required] ${proposal.proposalNumber} - ${nextStage.name}`,
+              `<p>Proposal <strong>${proposal.proposalNumber} - ${proposal.title}</strong> is pending your review as ${nextStage.approverRole}.</p><p>Total Value: ₹${proposal.totalInvestment.toLocaleString('en-IN')}</p>`,
+              'APPROVAL_REQUEST',
+              session
+            );
+          }
+        }
+
+        return proposal;
+      } else {
+        // Final approval reached!
+        proposal.status = 'APPROVED';
+        await proposal.save({ session });
+
+        // Update Department Budget utilisation within transaction
+        const budget = await Budget.findOne({
+          departmentId: proposal.departmentId,
+        });
+
+        if (budget) {
+          budget.utilisedAmount += proposal.totalInvestment;
+          await budget.save({ session });
+        }
+
+        await logAudit({
+          userId,
+          userName: user.name,
+          entityType: 'PROPOSAL',
+          entityId: proposalId,
+          action: 'APPROVE',
+          before: beforeSnapshot,
+          after: { status: 'APPROVED', isFinalApproval: true },
+          ipAddress,
+          session,
+        });
+
+        const initiator: any = proposal.initiatorId;
+        if (initiator) {
+          await createNotification(
+            initiator._id,
+            `Proposal Fully Approved! 🎉`,
+            `Your CAPEX Proposal "${proposal.title}" has received all required executive approvals. Ready for PO generation.`,
+            'APPROVAL',
+            `/proposals/${proposalId}`,
+            session
+          );
+
+          await sendSimulatedEmail(
+            initiator.email,
+            initiator.name,
+            `[ChangeFlow APPROVED] Proposal ${proposal.proposalNumber} Sanctioned`,
+            `<p>Congratulations! Proposal <strong>${proposal.proposalNumber}</strong> has completed all approval stages and is sanctioned.</p><p>Total Approved Budget: ₹${proposal.totalInvestment.toLocaleString('en-IN')}</p>`,
+            'APPROVAL_REQUEST',
+            session
+          );
+        }
+
+        return proposal;
+      }
+    }
+
+    // 4. DELEGATE
+    if (action === 'DELEGATE') {
+      if (!delegatedToId) {
+        throw new Error('delegatedToId is required for delegation');
+      }
+
+      const delegatee = await User.findById(delegatedToId);
+      if (!delegatee) throw new Error('Delegatee user not found');
+
+      const now = new Date();
+      const nextWeek = new Date(now.getTime() + 7 * 86400000);
+
+      const delegationDoc = {
+        delegatorId: user._id,
+        delegateeId: delegatee._id,
+        role: currentStage.approverRole,
+        startDate: now,
+        endDate: nextWeek,
+        reason: comments || `Delegated for ${currentStage.name} review`,
+        isActive: true,
+      };
+
+      if (session) {
+        await Delegation.create([delegationDoc], { session });
+      } else {
+        await Delegation.create(delegationDoc);
+      }
+
+      const actionDoc = {
+        proposalId: proposal._id,
+        stageId: currentStage._id,
+        stageName: currentStage.name,
+        approverId: user._id,
+        action: 'DELEGATE',
+        comments: comments || `Delegated authority to ${delegatee.name}`,
+        delegatedToId: delegatee._id,
+      };
+
+      if (session) {
+        await ApprovalAction.create([actionDoc], { session });
+      } else {
+        await ApprovalAction.create(actionDoc);
+      }
+
+      await logAudit({
+        userId,
+        userName: user.name,
+        entityType: 'PROPOSAL',
+        entityId: proposalId,
+        action: 'DELEGATE',
+        before: beforeSnapshot,
+        after: { delegatedToId: delegatee._id.toString(), delegateeName: delegatee.name },
+        ipAddress,
+        session,
       });
 
       await createNotification(
-        proposal.initiatorId,
-        `Proposal Fully Approved! 🎉`,
-        `Your proposal "${proposal.title}" (${proposal.proposalNumber}) has received final approval and is now ready for Procurement and PO generation.`,
+        delegatee._id,
+        `Approval Authority Delegated: ${proposal.proposalNumber}`,
+        `${user.name} has delegated their approval role for proposal "${proposal.title}" to you.`,
         'APPROVAL',
-        `/proposals/${proposalId}`
+        `/proposals/${proposalId}`,
+        session
       );
 
-      await sendSimulatedEmail(
-        proposal.initiator.email,
-        proposal.initiator.name,
-        `[ChangeFlow] Proposal Fully Approved: ${proposal.proposalNumber}`,
-        `<p>Congratulations! Proposal <strong>${proposal.proposalNumber}</strong> has completed all approval stages successfully.</p><p>Total Sanctioned: ₹${proposal.totalInvestment.toLocaleString('en-IN')}</p>`,
-        'APPROVAL_REQUEST'
-      );
-
-      return updated;
-    }
-  }
-
-  // 4. DELEGATE
-  if (action === 'DELEGATE') {
-    if (!delegatedToId) {
-      throw new Error('Delegated target user ID is required');
+      return proposal;
     }
 
-    const delegatee = await prisma.user.findUnique({ where: { id: delegatedToId } });
-    if (!delegatee) throw new Error('Target user not found');
-
-    await prisma.approvalAction.create({
-      data: {
-        proposalId,
-        stageId: currentStage.id,
-        stageName: currentStage.name,
-        approverId: userId,
-        action: 'DELEGATE',
-        comments: comments || `Delegated approval authority to ${delegatee.name}`,
-        delegatedToId,
-      },
-    });
-
-    await createNotification(
-      delegatedToId,
-      `Approval Delegated: ${proposal.proposalNumber}`,
-      `${user.name} has delegated the approval of proposal "${proposal.title}" (${currentStage.name}) to you.`,
-      'APPROVAL',
-      `/proposals/${proposalId}`
-    );
-
-    return proposal;
-  }
-
-  throw new Error(`Unsupported action ${action}`);
+    throw new Error(`Unsupported action ${action}`);
+  });
 }
 
 /**
  * SLA check: Finds overdue proposals and sends auto-escalations
  */
 export async function runSLACheckAndEscalations() {
-  const pendingProposals = await prisma.proposal.findMany({
-    where: { status: 'IN_REVIEW' },
-    include: {
-      currentStage: true,
-      initiator: true,
-      department: true,
-    },
-  });
+  const pendingProposals = await Proposal.find({ status: 'IN_REVIEW' })
+    .populate('departmentId')
+    .populate('initiatorId');
 
   const now = new Date();
   const escalations = [];
 
   for (const proposal of pendingProposals) {
-    if (!proposal.currentStage) continue;
-    const slaDays = proposal.currentStage.slaDays || 3;
+    if (!proposal.currentStageId) continue;
+
+    const workflowTemplate = await WorkflowTemplate.findOne({
+      proposalTypeId: proposal.proposalTypeId,
+    });
+    const currentStage = workflowTemplate?.stages.find(
+      (s: any) => s._id.toString() === proposal.currentStageId?.toString()
+    );
+
+    if (!currentStage) continue;
+    const slaDays = currentStage.slaDays || 3;
     const stageAgeMs = now.getTime() - new Date(proposal.updatedAt).getTime();
     const stageAgeDays = stageAgeMs / (1000 * 60 * 60 * 24);
 
     if (stageAgeDays > slaDays) {
-      // Overdue! Send auto-escalation to approvers and Management
-      const approvers = await prisma.user.findMany({
-        where: { role: { name: proposal.currentStage.approverRole }, isActive: true },
-      });
-      const managers = await prisma.user.findMany({
-        where: { role: { name: 'Management' }, isActive: true },
-      });
+      const targetRole = await Role.findOne({ name: currentStage.approverRole });
+      const approvers = targetRole ? await User.find({ roleId: targetRole._id, isActive: true }) : [];
+
+      const managementRole = await Role.findOne({ name: 'Management' });
+      const managers = managementRole ? await User.find({ roleId: managementRole._id, isActive: true }) : [];
 
       for (const approver of approvers) {
         await createNotification(
-          approver.id,
+          approver._id,
           `⚠️ SLA Breached: ${proposal.proposalNumber}`,
-          `Proposal "${proposal.title}" is ${Math.floor(stageAgeDays - slaDays)} days overdue at stage "${proposal.currentStage.name}". Immediate action required.`,
+          `Proposal "${proposal.title}" is ${Math.floor(stageAgeDays - slaDays)} days overdue at stage "${currentStage.name}". Immediate action required.`,
           'SLA_WARNING',
-          `/proposals/${proposal.id}`
+          `/proposals/${proposal._id}`
         );
       }
 
+      const dept: any = proposal.departmentId;
       for (const manager of managers) {
         await createNotification(
-          manager.id,
+          manager._id,
           `🚨 SLA Escalation: ${proposal.proposalNumber}`,
-          `Proposal "${proposal.title}" (₹${proposal.totalInvestment.toLocaleString('en-IN')}) is delayed by ${Math.floor(stageAgeDays - slaDays)} days at "${proposal.currentStage.name}". Escalated for review.`,
+          `Proposal "${proposal.title}" (₹${proposal.totalInvestment.toLocaleString('en-IN')}) is delayed by ${Math.floor(stageAgeDays - slaDays)} days at "${currentStage.name}". Escalated for review.`,
           'ESCALATION',
-          `/proposals/${proposal.id}`
+          `/proposals/${proposal._id}`
         );
 
         await sendSimulatedEmail(
           manager.email,
           manager.name,
           `[ChangeFlow ESCALATION] SLA Breach on ${proposal.proposalNumber}`,
-          `<p>Proposal <strong>${proposal.proposalNumber}</strong> in Department <strong>${proposal.department.name}</strong> has breached its SLA of ${slaDays} days.</p><p>Current Stage: ${proposal.currentStage.name}</p><p>Days pending: ${stageAgeDays.toFixed(1)} days</p>`,
+          `<p>Proposal <strong>${proposal.proposalNumber}</strong> in Department <strong>${dept?.name || 'Operations'}</strong> has breached its SLA of ${slaDays} days.</p><p>Current Stage: ${currentStage.name}</p><p>Days pending: ${stageAgeDays.toFixed(1)} days</p>`,
           'SLA_ESCALATION'
         );
       }
 
       escalations.push({
-        proposalId: proposal.id,
-        stageName: proposal.currentStage.name,
+        proposalId: proposal._id.toString(),
+        stageName: currentStage.name,
         daysOverdue: stageAgeDays - slaDays,
       });
     }

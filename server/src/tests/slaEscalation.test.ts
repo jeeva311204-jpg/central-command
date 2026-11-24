@@ -1,5 +1,15 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { prisma } from '../db';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setupTestDB, teardownTestDB } from './setup';
+import {
+  User,
+  Department,
+  ProposalType,
+  Proposal,
+  WorkflowTemplate,
+  Notification,
+  SimulatedEmail,
+  Role,
+} from '../models';
 import { runSLACheckAndEscalations } from '../services/workflowEngine';
 
 describe('Item 2: SLA Escalation Automation & Overdue Fixtures Test', () => {
@@ -11,89 +21,120 @@ describe('Item 2: SLA Escalation Automation & Overdue Fixtures Test', () => {
   let freshProposal: any;
 
   beforeAll(async () => {
-    user = await prisma.user.findFirst({ where: { role: { name: 'Employee' } } });
-    department = await prisma.department.findFirst();
-    proposalType = await prisma.proposalType.findFirst({
-      include: { workflowTemplate: { include: { stages: true } } },
+    await setupTestDB();
+
+    const [empRole, hodRole, mgmtRole] = await Promise.all([
+      Role.findOneAndUpdate({ name: 'Employee' }, { name: 'Employee' }, { upsert: true, new: true }),
+      Role.findOneAndUpdate({ name: 'HOD' }, { name: 'HOD' }, { upsert: true, new: true }),
+      Role.findOneAndUpdate({ name: 'Management' }, { name: 'Management' }, { upsert: true, new: true }),
+    ]);
+
+    department = await Department.create({ name: 'SLA Test Dept', code: 'SLAD', isActive: true });
+
+    user = await User.create({
+      name: 'SLA Initiator',
+      email: `sla-user-${Date.now()}@changeflow.com`,
+      roleId: empRole._id,
+      roleName: 'Employee',
+      departmentId: department._id,
+      passwordHash: 'dummy',
+      isActive: true,
     });
-    stage = proposalType.workflowTemplate.stages[0]; // e.g. HOD stage
+
+    const hodUser = await User.create({
+      name: 'SLA HOD',
+      email: `sla-hod-${Date.now()}@changeflow.com`,
+      roleId: hodRole._id,
+      roleName: 'HOD',
+      departmentId: department._id,
+      passwordHash: 'dummy',
+      isActive: true,
+    });
+
+    await User.create({
+      name: 'SLA Director',
+      email: `sla-director-${Date.now()}@changeflow.com`,
+      roleId: mgmtRole._id,
+      roleName: 'Management',
+      departmentId: department._id,
+      passwordHash: 'dummy',
+      isActive: true,
+    });
+
+    proposalType = await ProposalType.create({
+      code: 'SLA_TEST',
+      name: 'SLA Test Type',
+      isActive: true,
+    });
+
+    const template = await WorkflowTemplate.create({
+      proposalTypeId: proposalType._id,
+      name: 'SLA Test Template',
+      stages: [
+        { stepOrder: 1, name: 'HOD Review', approverRole: 'HOD', slaDays: 2 },
+      ],
+    });
+    stage = template.stages[0];
 
     const pastDate = new Date();
-    pastDate.setDate(pastDate.getDate() - 10); // 10 days in past (SLA is 2-3 days)
+    pastDate.setDate(pastDate.getDate() - 10);
 
-    // Overdue proposal fixture
-    overdueProposal = await prisma.proposal.create({
-      data: {
-        proposalNumber: `TEST-OVERDUE-${Date.now()}`,
-        title: 'Overdue Test Machine for SLA Escalation',
-        proposalTypeId: proposalType.id,
-        departmentId: department.id,
-        initiatorId: user.id,
-        currentStageId: stage.id,
-        status: 'IN_REVIEW',
-        totalInvestment: 2500000,
-        updatedAt: pastDate,
-      },
+    overdueProposal = await Proposal.create({
+      proposalNumber: `TEST-OVERDUE-${Date.now()}`,
+      title: 'Overdue Test Machine for SLA Escalation',
+      proposalTypeId: proposalType._id,
+      departmentId: department._id,
+      initiatorId: user._id,
+      currentStageId: stage._id,
+      status: 'IN_REVIEW',
+      totalInvestment: 2500000,
     });
 
-    // Manually force updatedAt into the past because Prisma @updatedAt defaults to now() on creation
-    await prisma.$executeRawUnsafe(
-      `UPDATE Proposal SET updatedAt = ? WHERE id = ?`,
-      pastDate.toISOString(),
-      overdueProposal.id
+    await Proposal.findByIdAndUpdate(
+      overdueProposal._id,
+      { updatedAt: pastDate },
+      { timestamps: false }
     );
 
-    // Fresh proposal fixture (updated right now)
-    freshProposal = await prisma.proposal.create({
-      data: {
-        proposalNumber: `TEST-FRESH-${Date.now()}`,
-        title: 'Fresh Test Machine within SLA',
-        proposalTypeId: proposalType.id,
-        departmentId: department.id,
-        initiatorId: user.id,
-        currentStageId: stage.id,
-        status: 'IN_REVIEW',
-        totalInvestment: 1500000,
-      },
+    freshProposal = await Proposal.create({
+      proposalNumber: `TEST-FRESH-${Date.now()}`,
+      title: 'Fresh Test Machine within SLA',
+      proposalTypeId: proposalType._id,
+      departmentId: department._id,
+      initiatorId: user._id,
+      currentStageId: stage._id,
+      status: 'IN_REVIEW',
+      totalInvestment: 1500000,
     });
+  });
+
+  afterAll(async () => {
+    await teardownTestDB();
   });
 
   it('detects overdue proposals and triggers auto-escalations', async () => {
     const escalations = await runSLACheckAndEscalations();
 
-    // Verify overdueProposal was escalated
-    const overdueResult = escalations.find((e) => e.proposalId === overdueProposal.id);
+    const overdueResult = escalations.find((e) => e.proposalId === overdueProposal._id.toString());
     expect(overdueResult).toBeDefined();
     expect(overdueResult?.daysOverdue).toBeGreaterThan(0);
 
-    // Verify fresh proposal was NOT escalated
-    const freshResult = escalations.find((e) => e.proposalId === freshProposal.id);
+    const freshResult = escalations.find((e) => e.proposalId === freshProposal._id.toString());
     expect(freshResult).toBeUndefined();
   });
 
   it('generates in-app notifications and email alerts for approvers and management', async () => {
-    // Check notifications created for the overdue proposal
-    const notifications = await prisma.notification.findMany({
-      where: {
-        linkUrl: `/proposals/${overdueProposal.id}`,
-      },
+    const notifications = await Notification.find({
+      linkUrl: `/proposals/${overdueProposal._id}`,
     });
-
     expect(notifications.length).toBeGreaterThan(0);
-    const hasSlaWarningOrEscalation = notifications.some(
-      (n) => n.type === 'SLA_WARNING' || n.type === 'ESCALATION'
-    );
-    expect(hasSlaWarningOrEscalation).toBe(true);
+    expect(notifications.some((n) => n.title.includes('SLA Escalation'))).toBe(true);
 
-    // Check simulated email created
-    const emails = await prisma.simulatedEmail.findMany({
-      where: {
-        category: 'SLA_ESCALATION',
-        subject: { contains: overdueProposal.proposalNumber },
-      },
+    const emails = await SimulatedEmail.find({
+      category: 'SLA_ESCALATION',
+      subject: { $regex: overdueProposal.proposalNumber },
     });
-
     expect(emails.length).toBeGreaterThan(0);
-    expect(emails[0].bodyHtml).toContain(overdueProposal.proposalNumber);
+    expect(emails[0].bodyHtml).toContain('overdue');
   });
 });

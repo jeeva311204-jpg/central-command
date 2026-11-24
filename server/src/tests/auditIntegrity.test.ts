@@ -1,7 +1,16 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../app';
-import { prisma } from '../db';
+import { setupTestDB, teardownTestDB } from './setup';
+import {
+  User,
+  Department,
+  ProposalType,
+  Proposal,
+  ProposalVersion,
+  AuditLog,
+  Role,
+} from '../models';
 import { generateToken } from '../middleware/auth';
 
 describe('Item 3: Audit Integrity & Immutability Test', () => {
@@ -12,111 +21,144 @@ describe('Item 3: Audit Integrity & Immutability Test', () => {
   let auditLogRecord: any;
 
   beforeAll(async () => {
-    adminUser = await prisma.user.findFirst({
-      where: { role: { name: 'Admin' } },
-      include: { role: true },
-    });
-    adminToken = generateToken(adminUser);
+    await setupTestDB();
 
-    const dept = await prisma.department.findFirst();
-    const propType = await prisma.proposalType.findFirst();
+    const role = await Role.findOneAndUpdate(
+      { name: 'Admin' },
+      { name: 'Admin', description: 'Administrator' },
+      { upsert: true, new: true }
+    );
 
-    // Create a proposal
-    testProposal = await prisma.proposal.create({
-      data: {
-        proposalNumber: `INTEG-TEST-${Date.now()}`,
-        title: 'Audit Integrity Test Machine',
-        proposalTypeId: propType.id,
-        departmentId: dept.id,
-        initiatorId: adminUser.id,
-        totalInvestment: 1200000,
-        status: 'IN_REVIEW',
-      },
+    const dept = await Department.create({
+      name: 'Engineering Testing',
+      code: 'TEST',
+      isActive: true,
     });
 
-    // Create an immutable version record
-    versionRecord = await prisma.proposalVersion.create({
-      data: {
-        proposalId: testProposal.id,
-        versionNumber: 1,
-        snapshotJson: JSON.stringify({ title: testProposal.title, amount: 1200000 }),
-        changedById: adminUser.id,
-        changeSummary: 'Initial proposal snapshot',
-      },
+    const propType = await ProposalType.create({
+      code: 'TEST_MACHINE',
+      name: 'Test Machine Purchase',
+      category: 'CAPEX',
+      isActive: true,
     });
 
-    // Create an immutable audit log record
-    auditLogRecord = await prisma.auditLog.create({
-      data: {
-        userId: adminUser.id,
-        userName: adminUser.name,
-        entityType: 'PROPOSAL',
-        entityId: testProposal.id,
-        action: 'CREATE',
-        beforeJson: null,
-        afterJson: JSON.stringify({ id: testProposal.id }),
-      },
+    adminUser = await User.create({
+      name: 'Audit Admin',
+      email: `admin-audit-${Date.now()}@changeflow.com`,
+      roleId: role._id,
+      roleName: 'Admin',
+      departmentId: dept._id,
+      passwordHash: 'dummyhash',
+      isActive: true,
+    });
+
+    adminToken = generateToken({
+      id: adminUser._id.toString(),
+      email: adminUser.email,
+      name: adminUser.name,
+      role: 'Admin',
+      departmentId: dept._id.toString(),
+    });
+
+    testProposal = await Proposal.create({
+      proposalNumber: `INTEG-TEST-${Date.now()}`,
+      title: 'Audit Integrity Test Machine',
+      proposalTypeId: propType._id,
+      departmentId: dept._id,
+      initiatorId: adminUser._id,
+      totalInvestment: 1200000,
+      status: 'IN_REVIEW',
+    });
+
+    versionRecord = await ProposalVersion.create({
+      proposalId: testProposal._id,
+      versionNumber: 1,
+      snapshot: { title: testProposal.title, amount: 1200000 },
+      changedById: adminUser._id,
+      changeSummary: 'Initial proposal snapshot',
+    });
+
+    auditLogRecord = await AuditLog.create({
+      userId: adminUser._id.toString(),
+      userName: adminUser.name,
+      entityType: 'PROPOSAL',
+      entityId: testProposal._id.toString(),
+      action: 'CREATE',
+      afterJson: JSON.stringify({ id: testProposal._id.toString() }),
     });
   });
 
+  afterAll(async () => {
+    await teardownTestDB();
+  });
+
   it('rejects any DELETE or PUT/PATCH requests to AuditLog endpoints (404 Not Found)', async () => {
-    // Attempt to DELETE an audit log
     const delRes = await request(app)
-      .delete(`/api/audit-logs/${auditLogRecord.id}`)
+      .delete(`/api/audit-logs/${auditLogRecord._id}`)
       .set('Authorization', `Bearer ${adminToken}`);
     expect(delRes.status).toBe(404);
 
-    // Attempt to PUT (modify) an audit log
     const putRes = await request(app)
-      .put(`/api/audit-logs/${auditLogRecord.id}`)
+      .put(`/api/audit-logs/${auditLogRecord._id}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ action: 'TAMPERED' });
     expect(putRes.status).toBe(404);
   });
 
   it('rejects any DELETE or PUT/PATCH requests to ProposalVersion endpoints (404 Not Found)', async () => {
-    // Attempt to DELETE a proposal version
     const delRes = await request(app)
-      .delete(`/api/proposals/${testProposal.id}/versions/${versionRecord.id}`)
+      .delete(`/api/proposals/${testProposal._id}/versions/${versionRecord._id}`)
       .set('Authorization', `Bearer ${adminToken}`);
     expect(delRes.status).toBe(404);
 
-    // Attempt to PUT (modify) a proposal version
     const putRes = await request(app)
-      .put(`/api/proposals/${testProposal.id}/versions/${versionRecord.id}`)
+      .put(`/api/proposals/${testProposal._id}/versions/${versionRecord._id}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ snapshotJson: '{}' });
     expect(putRes.status).toBe(404);
   });
 
-  it('enforces database-level RESTRICT on Proposal deletion when ProposalVersion exists (prevents cascading deletes)', async () => {
-    // Attempting to delete the proposal directly must fail because ProposalVersion onDelete is Restrict
-    let deleteFailed = false;
+  it('enforces model-level pre-hook blocking any modification to AuditLog', async () => {
+    let updateError: any = null;
     try {
-      await prisma.proposal.delete({
-        where: { id: testProposal.id },
-      });
-    } catch (error: any) {
-      deleteFailed = true;
-      // Prisma error code P2003 or P2014 or foreign key constraint error
-      expect(error.message).toMatch(/Foreign key|constraint|violation|delete/i);
+      await AuditLog.updateOne({ _id: auditLogRecord._id }, { action: 'TAMPERED' });
+    } catch (err: any) {
+      updateError = err;
     }
-    expect(deleteFailed).toBe(true);
-
-    // Verify ProposalVersion record remains intact
-    const survivingVersion = await prisma.proposalVersion.findUnique({
-      where: { id: versionRecord.id },
-    });
-    expect(survivingVersion).not.toBeNull();
+    expect(updateError).not.toBeNull();
+    expect(updateError.message).toContain('AuditLog is immutable and cannot be updated');
   });
 
-  it('proves AuditLog record persists independently even if referenced entity is modified', async () => {
-    // Verify AuditLog still exists with original un-tampered data
-    const survivingLog = await prisma.auditLog.findUnique({
-      where: { id: auditLogRecord.id },
-    });
-    expect(survivingLog).not.toBeNull();
-    expect(survivingLog?.action).toBe('CREATE');
-    expect(survivingLog?.entityId).toBe(testProposal.id);
+  it('enforces model-level pre-hook blocking any deletion of AuditLog', async () => {
+    let deleteError: any = null;
+    try {
+      await AuditLog.deleteOne({ _id: auditLogRecord._id });
+    } catch (err: any) {
+      deleteError = err;
+    }
+    expect(deleteError).not.toBeNull();
+    expect(deleteError.message).toContain('AuditLog is immutable and cannot be deleted');
+  });
+
+  it('enforces model-level pre-hook blocking any modification to ProposalVersion', async () => {
+    let updateError: any = null;
+    try {
+      await ProposalVersion.updateOne({ _id: versionRecord._id }, { changeSummary: 'TAMPERED' });
+    } catch (err: any) {
+      updateError = err;
+    }
+    expect(updateError).not.toBeNull();
+    expect(updateError.message).toContain('ProposalVersion is immutable and cannot be updated');
+  });
+
+  it('enforces model-level pre-hook blocking any deletion of ProposalVersion', async () => {
+    let deleteError: any = null;
+    try {
+      await ProposalVersion.deleteOne({ _id: versionRecord._id });
+    } catch (err: any) {
+      deleteError = err;
+    }
+    expect(deleteError).not.toBeNull();
+    expect(deleteError.message).toContain('ProposalVersion is immutable and cannot be deleted');
   });
 });

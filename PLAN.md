@@ -5,7 +5,7 @@
 
 ---
 
-## 1. System Architecture
+## 1. System Architecture (MongoDB & Mongoose)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
@@ -27,8 +27,9 @@
 │                       BACKEND: Node.js + Express + TypeScript                    │
 ├──────────────────────────────────────────────────────────────────────────────────┤
 │ • Router & Controller Layer: RBAC Middleware, File Uploads (Multer), Validation  │
+│ • Security Layer: express-mongo-sanitize, Zod NoSQL Injection Guards, Bcrypt    │
 │ • Core Workflow Engine: Dynamic Stage Evaluator, Threshold Rules, Delegation,    │
-│   SLA Escalation Engine, Version Control                                         │
+│   SLA Escalation Engine, Version Control, ACID Transaction Management            │
 │ • Financial Evaluation Service: Total Cost, Net Benefit, Simple Payback, ROI,    │
 │   NPV, IRR (Newton-Raphson), Discounted Payback, Straight-Line Depreciation      │
 │ • Procurement Service: Weighted Quotation Scoring, Best-Value Recommendation,    │
@@ -36,97 +37,81 @@
 │ • Asset Lifecycle Service: Commissioning -> Auto-Asset Registration -> Warranties │
 │   & Preventive Maintenance Schedules                                             │
 │ • Post-Investment Audit Engine: 3, 6, 12-Month Scheduled Reviews vs Projections  │
-│ • Notification & Simulated Email Dispatcher                                      │
-│ • Immutable Audit Logger (Who / What / When / Before / After JSON diff)          │
-│ • PDF Generation Service: Detailed Executive Proposal Dossier                    │
+│ • Notification & Outbound Nodemailer / Fallback Email Dispatcher                 │
+│ • Immutable Audit Logger (Mongoose Pre-Hooks blocking Update & Delete)           │
+│ • PDF & Excel Generation Services: Dossier & Multi-Sheet Excel Registers         │
 └──────────────────────────────────────┬───────────────────────────────────────────┘
-                                       │ Prisma ORM
+                                       │ Mongoose ODM (Replica Set ACID Transactions)
 ┌──────────────────────────────────────▼───────────────────────────────────────────┐
-│                      DATABASE: SQLite (Portable to PostgreSQL)                   │
-│   Prisma Schema with 24 Models, Foreign Key Integrity, Cascades, Indexes        │
+│                      DATABASE: MongoDB Atlas / Local MongoDB                     │
+│   25 Collections, Atomic Counters, Embedded Documents, Reference Population     │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Comprehensive Data Model
+## 2. MongoDB Data Model & Design Decisions
 
-The database comprises 24 relational models designed for SQLite with full portability to PostgreSQL:
+### A. Embedding vs Referencing Strategy
+- **Embedded Subdocuments (bounded in size, tightly-coupled lifecycle)**:
+  - `betterment` inside `Proposal` (production, financial, quality, manpower, safetyMaintenance sections)
+  - `customFields` inside `Proposal` (type-specific dynamic form answers)
+  - `stages` inside `WorkflowTemplate` (ordered approval steps with SLAs, thresholds, and conditions)
+  - `formSchema` inside `ProposalType` (field definitions and required financial inputs)
+  - `items` inside `ChecklistTemplate` (ordered checklist questions)
+  - `riskAssessment` and `impactAreas` inside `Change4M`
+- **Referenced Documents (shared across modules, unbounded growth, queryable independently)**:
+  - `User`, `Department`, `Budget`, `Vendor`, `Quotation`, `PurchaseOrder`, `Delivery`, `Asset`, `MaintenanceSchedule`, `AuditReview`, `Task`, `ApprovalAction`, `AuditLog`, `ProposalVersion`, `Notification`, `SimulatedEmail`.
+  - Stored with `ObjectId` references and populated dynamically via Mongoose virtuals.
 
-1. **User**: `id`, `name`, `email`, `passwordHash`, `roleId`, `departmentId`, `phone`, `isActive`, `createdAt`
-2. **Role**: `id`, `name` (Employee, HOD, Engineer, Maintenance, Finance, Procurement, Quality, Management, Admin), `description`
-3. **Department**: `id`, `name`, `code`, `hodId`, `createdAt`
-4. **Budget**: `id`, `departmentId`, `fiscalYear`, `allocatedAmount`, `utilisedAmount`, `currency`
-5. **ProposalType**: `id`, `code`, `name`, `description`, `icon`, `category` (14 standard industrial types)
-6. **FormSchema**: `id`, `proposalTypeId`, `fieldsJson`, `requiredFinancialsJson`, `checklistTemplateId`, `version`
-7. **WorkflowTemplate**: `id`, `proposalTypeId`, `name`, `description`, `isActive`, `version`
-8. **WorkflowStage**: `id`, `workflowTemplateId`, `stepOrder`, `name`, `approverRole`, `slaDays`, `conditionExpr`, `minAmount`, `maxAmount`, `checklistTemplateId`
-9. **Proposal**: `id`, `proposalNumber` (e.g., `CF-2026-001`), `title`, `proposalTypeId`, `departmentId`, `initiatorId`, `currentStageId`, `status` (DRAFT, IN_REVIEW, REVISION_REQUESTED, APPROVED, REJECTED, CANCELLED), `priority`, `totalInvestment`, `currency`, `usefulLifeYears`, `discountRate`, `salvageValue`, `annualSavings`, `extraRevenue`, `extraOpex`, `simplePayback`, `roiPercent`, `npv`, `irr`, `discountedPayback`, `annualDepreciation`, `budgetImpactStatus`, `machineName`, `currentMachineDetails`, `proposedMachineDetails`, `bettermentJson`, `createdAt`, `updatedAt`
-10. **ProposalVersion**: `id`, `proposalId`, `versionNumber`, `snapshotJson`, `changedById`, `changeSummary`, `createdAt`
-11. **ApprovalAction**: `id`, `proposalId`, `stageId`, `stageName`, `approverId`, `action` (APPROVE, REJECT, REQUEST_REVISION, DELEGATE), `comments`, `checklistResponsesJson`, `delegatedToId`, `createdAt`
-12. **Delegation**: `id`, `delegatorId`, `delegateeId`, `role`, `startDate`, `endDate`, `reason`, `isActive`
-13. **ChecklistTemplate**: `id`, `name`, `category` (EVALUATION, IMPLEMENTATION, COMMISSIONING, VERIFICATION), `description`
-14. **ChecklistItem**: `id`, `checklistTemplateId`, `itemText`, `order`, `isMandatory`, `defaultAssigneeRole`
-15. **Task**: `id`, `proposalId`, `change4mId`, `title`, `description`, `assignedToId`, `dueDate`, `completedAt`, `status` (PENDING, IN_PROGRESS, COMPLETED, OVERDUE), `verificationNotes`
-16. **Change4M**: `id`, `proposalId`, `changeCategory` (MAN, MACHINE, MATERIAL, METHOD), `title`, `description`, `reasonForChange`, `riskAssessmentJson` (severity, probability, riskScore, mitigation), `impactProduction`, `impactQuality`, `impactSafety`, `status`, `closureNotes`, `closedAt`, `verifiedById`
-17. **Vendor**: `id`, `name`, `code`, `rating` (1-5), `contactPerson`, `email`, `phone`, `city`, `categoriesJson`, `purchaseHistoryCount`, `isApproved`
-18. **Quotation**: `id`, `proposalId`, `vendorId`, `quotationNumber`, `quoteDate`, `validUntil`, `price`, `installationCost`, `deliveryWeeks`, `warrantyMonths`, `capacityPerHour`, `powerConsumptionKw`, `technicalScore`, `notes`, `fileAttachmentId`, `isRecommended`, `isAccepted`
-19. **PurchaseOrder**: `id`, `poNumber`, `proposalId`, `vendorId`, `quotationId`, `totalAmount`, `status` (CREATED, DISPATCHED, DELIVERED, INVOICED, PAID), `issuedDate`, `expectedDeliveryDate`, `actualDeliveryDate`, `paymentTerms`, `createdById`
-20. **Delivery**: `id`, `purchaseOrderId`, `trackingNumber`, `carrier`, `dispatchDate`, `deliveryDate`, `installationDate`, `commissioningDate`, `trainingCompletedDate`, `qualityVerifiedById`, `engineeringVerifiedById`, `status`, `notes`
-21. **Asset**: `id`, `assetCode`, `name`, `proposalId`, `departmentId`, `vendorId`, `serialNumber`, `category`, `purchaseDate`, `commissioningDate`, `purchaseCost`, `warrantyExpiryDate`, `location`, `status` (ACTIVE, MAINTENANCE, RETIRED)
-22. **MaintenanceSchedule**: `id`, `assetId`, `title`, `frequencyType` (CALENDAR, OPERATING_HOURS), `frequencyValue`, `lastServiceDate`, `nextDueDate`, `nextDueHours`, `assignedToId`, `status` (SCHEDULED, DUE, OVERDUE, COMPLETED)
-23. **AuditReview**: `id`, `proposalId`, `assetId`, `intervalMonths` (3, 6, 12), `scheduledDate`, `conductedDate`, `status` (PENDING, COMPLETED, OVERDUE), `actualProductionUnits`, `targetProductionUnits`, `actualSavings`, `targetSavings`, `actualRoi`, `targetRoi`, `deviationNotes`, `conductedById`
-24. **Document**: `id`, `proposalId`, `entityType`, `entityId`, `fileName`, `fileType`, `fileSize`, `filePath`, `uploadedById`, `createdAt`
-25. **Notification**: `id`, `userId`, `title`, `message`, `type` (APPROVAL, ESCALATION, SLA_WARNING, WARRANTY, MAINTENANCE, AUDIT, SYSTEM), `isRead`, `linkUrl`, `createdAt`
-26. **SimulatedEmail**: `id`, `toEmail`, `recipientName`, `subject`, `bodyHtml`, `category`, `sentAt`
-27. **AuditLog**: `id`, `userId`, `userName`, `entityType`, `entityId`, `action` (CREATE, UPDATE, APPROVE, REJECT, DELETE), `beforeJson`, `afterJson`, `ipAddress`, `timestamp`
+### B. Integer Currency Enforcement
+All currency figures (purchasePrice, installationCost, totalInvestment, annualSavings, budget amounts, etc.) are strictly stored as rounded integers (`set: (v) => Math.round(v)`) to eliminate floating-point arithmetic errors.
+
+### C. Sequential Human-Readable Identifiers
+An atomic counter collection (`Counter`) with `getNextSequence(name, session)` generates collision-free, monotonic identifiers:
+- Proposals: `CF-2026-001`, `CF-2026-002`, ...
+- 4M Changes: `CHG-2026-001`, `CHG-2026-002`, ...
+- Purchase Orders: `PO-2026-001`, `PO-2026-002`, ...
+- Assets: `AST-PROD-001`, `AST-ENG-002`, ...
+
+### D. Optimistic Concurrency Control
+`versionKey: '__v'` is maintained on `Proposal` and `WorkflowTemplate`. Approval action submissions verify the stage hasn't already advanced concurrently.
+
+### E. Append-Only Immutability via Mongoose Hooks
+`AuditLog` and `ProposalVersion` models register strict Mongoose pre-hooks (`updateOne`, `updateMany`, `findOneAndUpdate`, `deleteOne`, `deleteMany`, `findOneAndDelete`) throwing runtime errors if any code attempts to alter or purge historical audit records.
+
+### F. Multi-Document ACID Transactions
+Using `withTransaction(async (session) => { ... })`:
+- Approval actions + stage progression + budget utilisation update + audit logging
+- Purchase Order generation + Delivery creation + Vendor purchase history update + audit logging
+- Delivery sign-off + Commissioning + Asset auto-registration + Maintenance schedule + Post-investment audits
 
 ---
 
-## 3. Milestones & Verification Steps
+## 3. Collections & Schema Indexing Reference
 
-- **Milestone 1: Project Scaffold, DB Schema, Auth & Seed Script**
-  - Scaffold Vite React + Node Express TypeScript workspaces.
-  - Setup Prisma schema with all 24 models, relations, seed data with 5 depts, 10 users across 9 roles, budgets, 6 vendors, 8 proposals, assets, checklists.
-  - Implement JWT Auth and RBAC middleware. Verify seed runs and generates database.
-
-- **Milestone 2: Workflow Engine, Threshold Rules, Delegations & Audit Trail**
-  - Workflow template and stage evaluator with dynamic thresholds (<= ₹1L, ₹1L-₹10L, > ₹10L).
-  - Actions: Approve, Reject, Revision Request, Delegation, SLA Escalations.
-  - Version snapshots on revision request.
-  - Write unit tests for workflow rules & delegations. Verify in test suite.
-
-- **Milestone 3: Machine Purchase & Replacement Proposals + Live Financial Engine**
-  - Implement 14 proposal types registry with schemas.
-  - Full New Machine Purchase & Replacement forms with mandatory 5-pillar Betterment Analysis (Production, Financial, Quality, Manpower, Safety/Maintenance).
-  - Live calculating Financial Evaluation: Total Investment, Net Benefit, Simple Payback, ROI %, Straight-Line Depreciation, Discounted Payback, NPV, IRR (Newton-Raphson).
-  - Real-time Budget check (Allocated vs Utilised, overrun warnings).
-  - Unit tests for financial math.
-
-- **Milestone 4: Vendor Quotation Comparison, Machine Matrix & PO Tracking**
-  - Vendor directory with ratings, history.
-  - Quotation upload & side-by-side comparison with customizable weights (Price, Warranty, Capacity, Power, Vendor Rating).
-  - Machine Comparison View (2-4 machines side-by-side highlighting best values).
-  - 1-click PO Generation from approved proposal + PO tracking lifecycle (Created -> Dispatched -> Delivered -> Invoiced -> Paid).
-
-- **Milestone 5: Delivery/Commissioning, Asset Register & Maintenance/Warranty Alerts**
-  - Delivery and 5-stage commissioning workflow (Delivery, Installation, Commissioning, Operator Training, Quality+Engineering signoff).
-  - Auto-creation of Asset in Asset Register upon commissioning.
-  - Preventive Maintenance scheduler (calendar & operating hours).
-  - Warranty expiration monitoring & alert badges.
-
-- **Milestone 6: 4M Change Management Module, Checklists & Staff Performance**
-  - 4M Change Request (Man, Machine, Material, Method) with Risk Matrix (Severity x Probability).
-  - Dynamic checklist assignment to technicians with due dates.
-  - Completion verification and closure.
-  - Staff Performance Dashboard: on-time completion %, overdue items by user and department.
-
-- **Milestone 7: Management CAPEX Dashboard, Post-Investment Audits & Notification Center**
-  - Executive CAPEX Dashboard with department filters, budget utilisation, delayed projects, spend breakdown, ROI analytics.
-  - Post-Investment Audits at 3, 6, 12 months with actual vs projected savings charts (Recharts).
-  - In-app Notification dropdown + Simulated Email Log view for full transparency.
-
-- **Milestone 8: PDF Proposal Export, End-to-End Verification, Demo Walkthrough & README**
-  - Executive proposal PDF generation endpoint/client download.
-  - Complete testing of all user journeys (Employee, HOD, Finance, Management, Procurement).
-  - README.md with architecture diagram, credentials table, and 5-minute hackathon judge demo script.
+1. **User**: `{ email: 1 }` (unique), `{ roleName: 1 }`, `{ departmentId: 1 }`, soft delete (`isActive: true`).
+2. **Department**: `{ code: 1 }` (unique), `{ isActive: 1 }`.
+3. **Budget**: `{ departmentId: 1, fiscalYear: 1 }` (unique compound index).
+4. **ProposalType**: `{ code: 1 }` (unique), `{ isActive: 1 }`.
+5. **WorkflowTemplate**: `{ proposalTypeId: 1 }`, embedded `stages`.
+6. **Proposal**: `{ proposalNumber: 1 }` (unique), `{ departmentId: 1, createdAt: -1 }`, `{ status: 1, currentStageId: 1 }`, `{ createdAt: -1 }`.
+7. **ProposalVersion**: `{ proposalId: 1, versionNumber: -1 }`, append-only.
+8. **ApprovalAction**: `{ proposalId: 1, createdAt: 1 }`.
+9. **Delegation**: `{ delegateeId: 1, role: 1, isActive: 1, startDate: 1, endDate: 1 }`.
+10. **ChecklistTemplate**: `{ category: 1 }`.
+11. **Task**: `{ change4mId: 1 }`, `{ proposalId: 1 }`, `{ assignedToId: 1 }`, `{ status: 1 }`.
+12. **Change4M**: `{ changeNumber: 1 }` (unique), `{ changeCategory: 1 }`, `{ status: 1 }`.
+13. **Vendor**: `{ code: 1 }` (unique), `{ rating: -1 }`, `{ isActive: 1 }`.
+14. **Quotation**: `{ proposalId: 1, weightedScore: -1 }`, `{ vendorId: 1 }`.
+15. **PurchaseOrder**: `{ poNumber: 1 }` (unique), `{ status: 1 }`, `{ proposalId: 1 }`.
+16. **Delivery**: `{ purchaseOrderId: 1 }` (unique), `{ status: 1 }`.
+17. **Asset**: `{ assetCode: 1 }` (unique), `{ warrantyExpiryDate: 1 }`, `{ departmentId: 1 }`.
+18. **MaintenanceSchedule**: `{ assetId: 1, nextDueDate: 1 }`, `{ status: 1 }`.
+19. **AuditReview**: `{ proposalId: 1, intervalMonths: 1 }`, `{ assetId: 1 }`.
+20. **DocumentModel**: `{ proposalId: 1 }`, `{ entityType: 1 }`.
+21. **Notification**: `{ userId: 1, isRead: 1, createdAt: -1 }`.
+22. **SimulatedEmail**: `{ toEmail: 1, sentAt: -1 }`, `{ category: 1 }`.
+23. **AuditLog**: `{ entityId: 1, timestamp: -1 }`, `{ entityType: 1 }`, append-only.
+24. **Role**: `{ name: 1 }` (unique).
+25. **Counter**: `{ name: 1 }` (unique).

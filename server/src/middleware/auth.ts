@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
-import { prisma } from '../db';
+import { User } from '../models/User';
 
 export interface AuthUser {
   id: string;
@@ -19,9 +19,10 @@ declare global {
   }
 }
 
-export function generateToken(user: { id: string; role?: { name: string } | string }): string {
+export function generateToken(user: { id?: string; _id?: any; role?: { name: string } | string }): string {
+  const userId = user.id || user._id?.toString();
   const roleName = typeof user.role === 'object' ? user.role?.name : user.role;
-  return jwt.sign({ userId: user.id, role: roleName }, config.jwtSecret, { expiresIn: '7d' });
+  return jwt.sign({ userId, role: roleName }, config.jwtSecret, { expiresIn: '7d' });
 }
 
 export async function authenticateToken(req: Request, res: Response, next: NextFunction) {
@@ -33,22 +34,22 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
   }
 
   try {
-    const decoded = jwt.verify(token, config.jwtSecret) as { userId: string };
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      include: { role: true, department: true },
-    });
+    const decoded = jwt.verify(token, config.jwtSecret) as { userId: string; role?: string };
+    const user = await User.findById(decoded.userId).populate('roleId').populate('departmentId');
 
     if (!user || !user.isActive) {
       return res.status(403).json({ error: 'User is inactive or not found' });
     }
 
+    const roleDoc: any = user.roleId;
+    const roleName = roleDoc?.name || decoded.role || 'Employee';
+
     req.user = {
-      id: user.id,
+      id: user._id.toString(),
       name: user.name,
       email: user.email,
-      role: user.role.name,
-      departmentId: user.departmentId || undefined,
+      role: roleName,
+      departmentId: user.departmentId ? user.departmentId.toString() : undefined,
     };
 
     next();

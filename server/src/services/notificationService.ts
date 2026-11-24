@@ -1,5 +1,7 @@
 import nodemailer from 'nodemailer';
-import { prisma } from '../db';
+import mongoose from 'mongoose';
+import { Notification } from '../models/Notification';
+import { SimulatedEmail } from '../models/SimulatedEmail';
 import { config } from '../config';
 
 // Lazy-initialized Nodemailer transporter
@@ -30,22 +32,30 @@ function getMailTransporter(): any {
 }
 
 export async function createNotification(
-  userId: string,
+  userId: string | mongoose.Types.ObjectId,
   title: string,
   message: string,
   type: 'APPROVAL' | 'ESCALATION' | 'SLA_WARNING' | 'WARRANTY' | 'MAINTENANCE' | 'AUDIT' | 'SYSTEM' = 'SYSTEM',
-  linkUrl?: string
+  linkUrl?: string,
+  session?: mongoose.ClientSession
 ) {
   try {
-    return await prisma.notification.create({
-      data: {
-        userId,
-        title,
-        message,
-        type,
-        linkUrl,
-      },
-    });
+    const data = {
+      userId: new mongoose.Types.ObjectId(userId.toString()),
+      title,
+      message,
+      type,
+      linkUrl,
+      isRead: false,
+      createdAt: new Date(),
+    };
+
+    if (session) {
+      const docs = await Notification.create([data], { session });
+      return docs[0];
+    } else {
+      return await Notification.create(data);
+    }
   } catch (err) {
     console.error('Failed to create notification:', err);
     return null;
@@ -61,7 +71,8 @@ export async function sendEmailNotification(
   recipientName: string,
   subject: string,
   bodyHtml: string,
-  category: 'APPROVAL_REQUEST' | 'SLA_ESCALATION' | 'REVISION_REQUEST' | 'PO_ISSUED' | 'WARRANTY_ALERT' | 'MAINTENANCE_ALERT'
+  category: 'APPROVAL_REQUEST' | 'SLA_ESCALATION' | 'REVISION_REQUEST' | 'PO_ISSUED' | 'WARRANTY_ALERT' | 'MAINTENANCE_ALERT',
+  session?: mongoose.ClientSession
 ) {
   let realEmailSent = false;
   let realEmailError: string | null = null;
@@ -85,15 +96,22 @@ export async function sendEmailNotification(
 
   // Always persist in database simulated email log for offline demo inspection and audit trail
   try {
-    const savedLog = await prisma.simulatedEmail.create({
-      data: {
-        toEmail,
-        recipientName,
-        subject,
-        bodyHtml: realEmailSent ? `${bodyHtml}<br/><small style="color:green;">[Delivered via SMTP]</small>` : bodyHtml,
-        category,
-      },
-    });
+    const data = {
+      toEmail,
+      recipientName,
+      subject,
+      bodyHtml: realEmailSent ? `${bodyHtml}<br/><small style="color:green;">[Delivered via SMTP]</small>` : bodyHtml,
+      category,
+      sentAt: new Date(),
+    };
+
+    let savedLog;
+    if (session) {
+      const docs = await SimulatedEmail.create([data], { session });
+      savedLog = docs[0];
+    } else {
+      savedLog = await SimulatedEmail.create(data);
+    }
 
     return {
       log: savedLog,

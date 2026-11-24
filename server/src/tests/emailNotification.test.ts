@@ -1,9 +1,18 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import nodemailer from 'nodemailer';
-import { prisma } from '../db';
+import { setupTestDB, teardownTestDB } from './setup';
+import { SimulatedEmail } from '../models';
 import { sendEmailNotification } from '../services/notificationService';
 
 describe('Item 7: Email Notification System (Nodemailer + Fallback Log)', () => {
+  beforeAll(async () => {
+    await setupTestDB();
+  });
+
+  afterAll(async () => {
+    await teardownTestDB();
+  });
+
   it('falls back to simulated database log when SMTP is unconfigured', async () => {
     const testRecipient = 'rajesh.hod@changeflow.com';
     const testSubject = `[ChangeFlow Test Approval] CF-2026-TEST-${Date.now()}`;
@@ -22,10 +31,8 @@ describe('Item 7: Email Notification System (Nodemailer + Fallback Log)', () => 
     expect(result?.log.toEmail).toBe(testRecipient);
     expect(result?.log.subject).toBe(testSubject);
 
-    // Verify stored in prisma database
-    const saved = await prisma.simulatedEmail.findUnique({
-      where: { id: result?.log.id },
-    });
+    // Verify stored in MongoDB
+    const saved = await SimulatedEmail.findById(result?.log.id || result?.log._id);
     expect(saved).not.toBeNull();
     expect(saved?.category).toBe('APPROVAL_REQUEST');
   });
@@ -45,7 +52,6 @@ describe('Item 7: Email Notification System (Nodemailer + Fallback Log)', () => 
       'SLA_ESCALATION'
     );
 
-    // Persisted in log despite network/SMTP failure
     expect(result?.log).toBeDefined();
     expect(result?.log.subject).toBe(testSubject);
     expect(result?.realEmailSent).toBe(false);

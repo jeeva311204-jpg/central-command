@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { prisma } from '../db';
+import mongoose from 'mongoose';
+import { DocumentModel } from '../models';
 import { authenticateToken } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { logAudit } from '../services/auditLogger';
@@ -8,21 +9,27 @@ const router = Router();
 
 // List documents
 router.get('/', authenticateToken, async (req, res) => {
-  const { proposalId, entityType } = req.query;
-  const where: any = {};
-  if (proposalId) where.proposalId = String(proposalId);
-  if (entityType) where.entityType = String(entityType);
+  try {
+    const { proposalId, entityType } = req.query;
+    const query: any = {};
+    if (proposalId) query.proposalId = new mongoose.Types.ObjectId(String(proposalId));
+    if (entityType) query.entityType = String(entityType);
 
-  const docs = await prisma.document.findMany({
-    where,
-    include: {
-      uploadedBy: { select: { id: true, name: true, role: true } },
-      proposal: { select: { id: true, proposalNumber: true, title: true } },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
+    const docs = await DocumentModel.find(query)
+      .populate('uploadedBy', 'name role')
+      .populate('proposal', 'proposalNumber title')
+      .sort({ createdAt: -1 });
 
-  return res.json(docs);
+    const result = docs.map((d) => {
+      const obj = d.toObject({ virtuals: true });
+      obj.id = obj._id.toString();
+      return obj;
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // Upload document
@@ -34,31 +41,32 @@ router.post('/upload', authenticateToken, upload.single('file'), async (req, res
 
     const { proposalId, entityType, entityId } = req.body;
 
-    const doc = await prisma.document.create({
-      data: {
-        proposalId: proposalId || null,
-        entityType: entityType || 'GENERAL',
-        entityId: entityId || null,
-        fileName: req.file.originalname,
-        fileType: req.file.mimetype,
-        fileSize: req.file.size,
-        filePath: `/uploads/${req.file.filename}`,
-        uploadedById: req.user!.id,
-      },
-      include: { uploadedBy: true },
+    const doc = await DocumentModel.create({
+      proposalId: proposalId ? new mongoose.Types.ObjectId(String(proposalId)) : undefined,
+      entityType: entityType || 'GENERAL',
+      entityId: entityId || undefined,
+      fileName: req.file.originalname,
+      fileType: req.file.mimetype,
+      fileSize: req.file.size,
+      filePath: `/uploads/${req.file.filename}`,
+      uploadedById: new mongoose.Types.ObjectId(req.user!.id),
     });
+
+    const populated = await DocumentModel.findById(doc._id).populate('uploadedBy');
 
     await logAudit({
       userId: req.user!.id,
       userName: req.user!.name,
       entityType: 'DOCUMENT',
-      entityId: doc.id,
+      entityId: doc._id.toString(),
       action: 'CREATE',
       after: { fileName: doc.fileName, size: doc.fileSize },
       ipAddress: req.ip,
     });
 
-    return res.status(201).json(doc);
+    const obj = populated!.toObject({ virtuals: true });
+    obj.id = obj._id.toString();
+    return res.status(201).json(obj);
   } catch (err: any) {
     console.error('File upload error:', err);
     return res.status(500).json({ error: err.message || 'File upload failed' });

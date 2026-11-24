@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { prisma } from '../db';
+import mongoose from 'mongoose';
+import { Vendor, Quotation, PurchaseOrder, Asset } from '../models';
 import { authenticateToken } from '../middleware/auth';
 import { logAudit } from '../services/auditLogger';
 
@@ -7,25 +8,44 @@ const router = Router();
 
 // List vendors
 router.get('/', authenticateToken, async (req, res) => {
-  const vendors = await prisma.vendor.findMany({
-    include: {
-      _count: { select: { quotations: true, purchaseOrders: true, assets: true } },
-    },
-    orderBy: { rating: 'desc' },
-  });
-  return res.json(vendors);
+  try {
+    const vendors = await Vendor.find({ isActive: true }).sort({ rating: -1 });
+
+    const result = await Promise.all(
+      vendors.map(async (v) => {
+        const [qCount, poCount, assetCount] = await Promise.all([
+          Quotation.countDocuments({ vendorId: v._id }),
+          PurchaseOrder.countDocuments({ vendorId: v._id }),
+          Asset.countDocuments({ vendorId: v._id }),
+        ]);
+
+        const obj = v.toObject({ virtuals: true });
+        obj.id = obj._id.toString();
+        obj._count = {
+          quotations: qCount,
+          purchaseOrders: poCount,
+          assets: assetCount,
+        };
+        return obj;
+      })
+    );
+
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // Create vendor
 router.post('/', authenticateToken, async (req, res) => {
-  const { name, code, contactPerson, email, phone, city, rating, categories } = req.body;
+  try {
+    const { name, code, contactPerson, email, phone, city, rating, categories } = req.body;
 
-  if (!name || !code) {
-    return res.status(400).json({ error: 'Name and Vendor code are required' });
-  }
+    if (!name || !code) {
+      return res.status(400).json({ error: 'Name and Vendor code are required' });
+    }
 
-  const vendor = await prisma.vendor.create({
-    data: {
+    const vendor = await Vendor.create({
       name,
       code,
       contactPerson,
@@ -33,48 +53,62 @@ router.post('/', authenticateToken, async (req, res) => {
       phone,
       city,
       rating: rating ? Number(rating) : 4.0,
-      categoriesJson: categories ? JSON.stringify(categories) : null,
-    },
-  });
+      categories: Array.isArray(categories) ? categories : [],
+      isActive: true,
+    });
 
-  return res.status(201).json(vendor);
+    const obj = vendor.toObject({ virtuals: true });
+    obj.id = obj._id.toString();
+    return res.status(201).json(obj);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // List quotations for a proposal
 router.get('/quotations/proposal/:proposalId', authenticateToken, async (req, res) => {
-  const proposalId = req.params.proposalId as string;
-  const quotations = await prisma.quotation.findMany({
-    where: { proposalId },
-    include: { vendor: true },
-    orderBy: { weightedScore: 'desc' },
-  });
-  return res.json(quotations);
+  try {
+    const proposalId = req.params.proposalId as string;
+    const quotations = await Quotation.find({ proposalId: new mongoose.Types.ObjectId(proposalId) })
+      .populate('vendor')
+      .sort({ weightedScore: -1 });
+
+    const result = quotations.map((q) => {
+      const obj = q.toObject({ virtuals: true });
+      obj.id = obj._id.toString();
+      return obj;
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // Create quotation
 router.post('/quotations', authenticateToken, async (req, res) => {
-  const {
-    proposalId,
-    vendorId,
-    quotationNumber,
-    price,
-    installationCost,
-    deliveryWeeks,
-    warrantyMonths,
-    capacityPerHour,
-    powerConsumptionKw,
-    technicalScore,
-    notes,
-  } = req.body;
-
-  if (!proposalId || !vendorId || !quotationNumber || price === undefined) {
-    return res.status(400).json({ error: 'proposalId, vendorId, quotationNumber and price are required' });
-  }
-
-  const quotation = await prisma.quotation.create({
-    data: {
+  try {
+    const {
       proposalId,
       vendorId,
+      quotationNumber,
+      price,
+      installationCost,
+      deliveryWeeks,
+      warrantyMonths,
+      capacityPerHour,
+      powerConsumptionKw,
+      technicalScore,
+      notes,
+    } = req.body;
+
+    if (!proposalId || !vendorId || !quotationNumber || price === undefined) {
+      return res.status(400).json({ error: 'proposalId, vendorId, quotationNumber and price are required' });
+    }
+
+    const quotation = await Quotation.create({
+      proposalId: new mongoose.Types.ObjectId(String(proposalId)),
+      vendorId: new mongoose.Types.ObjectId(String(vendorId)),
       quotationNumber,
       price: Number(price),
       installationCost: Number(installationCost) || 0,
@@ -84,144 +118,148 @@ router.post('/quotations', authenticateToken, async (req, res) => {
       powerConsumptionKw: powerConsumptionKw ? Number(powerConsumptionKw) : null,
       technicalScore: technicalScore ? Number(technicalScore) : 80,
       notes,
-    },
-    include: { vendor: true },
-  });
+    });
 
-  return res.status(201).json(quotation);
+    const populated = await Quotation.findById(quotation._id).populate('vendor');
+    const obj = populated!.toObject({ virtuals: true });
+    obj.id = obj._id.toString();
+    return res.status(201).json(obj);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // Multi-attribute weighted scoring & side-by-side comparison
-// Default weights: price (30%), warranty (20%), capacity (20%), power (15%), vendorRating (15%)
 router.post('/quotations/compare', authenticateToken, async (req, res) => {
-  const { proposalId, weights } = req.body;
+  try {
+    const { proposalId, weights } = req.body;
 
-  if (!proposalId) {
-    return res.status(400).json({ error: 'proposalId is required' });
-  }
-
-  const quotes = await prisma.quotation.findMany({
-    where: { proposalId },
-    include: { vendor: true },
-  });
-
-  if (quotes.length === 0) {
-    return res.json({ quotations: [], recommendedQuotationId: null });
-  }
-
-  const w = {
-    price: weights?.price ?? 30,
-    warranty: weights?.warranty ?? 20,
-    capacity: weights?.capacity ?? 20,
-    power: weights?.power ?? 15,
-    rating: weights?.rating ?? 15,
-  };
-
-  const totalWeight = w.price + w.warranty + w.capacity + w.power + w.rating;
-
-  // Find min/max for normalization
-  const minPrice = Math.min(...quotes.map(q => q.price + q.installationCost));
-  const maxPrice = Math.max(...quotes.map(q => q.price + q.installationCost));
-  const maxWarranty = Math.max(...quotes.map(q => q.warrantyMonths));
-  const minWarranty = Math.min(...quotes.map(q => q.warrantyMonths));
-  const maxCapacity = Math.max(...quotes.map(q => q.capacityPerHour || 1));
-  const minPower = Math.min(...quotes.map(q => q.powerConsumptionKw || 10));
-  const maxPower = Math.max(...quotes.map(q => q.powerConsumptionKw || 10));
-
-  let bestScore = -1;
-  let recommendedId: string | null = null;
-
-  const scoredQuotes = quotes.map(q => {
-    const totalCost = q.price + q.installationCost;
-    // Lower price is better: 100 for minPrice, linear down
-    const priceScore = maxPrice === minPrice ? 100 : ((maxPrice - totalCost) / (maxPrice - minPrice)) * 100;
-    // Higher warranty is better
-    const warrantyScore = maxWarranty === minWarranty ? 100 : (q.warrantyMonths / maxWarranty) * 100;
-    // Higher capacity is better
-    const capacityScore = (q.capacityPerHour || 1) / maxCapacity * 100;
-    // Lower power consumption is better
-    const powerScore = maxPower === minPower ? 100 : ((maxPower - (q.powerConsumptionKw || 10)) / (maxPower - minPower)) * 100;
-    // Vendor rating out of 5
-    const ratingScore = (q.vendor.rating / 5) * 100;
-
-    const weightedScore = Number((
-      (priceScore * w.price +
-        warrantyScore * w.warranty +
-        capacityScore * w.capacity +
-        powerScore * w.power +
-        ratingScore * w.rating) /
-      totalWeight
-    ).toFixed(2));
-
-    if (weightedScore > bestScore) {
-      bestScore = weightedScore;
-      recommendedId = q.id;
+    if (!proposalId) {
+      return res.status(400).json({ error: 'proposalId is required' });
     }
 
-    return {
-      ...q,
-      totalCost,
-      breakdownScores: {
-        priceScore: Number(priceScore.toFixed(1)),
-        warrantyScore: Number(warrantyScore.toFixed(1)),
-        capacityScore: Number(capacityScore.toFixed(1)),
-        powerScore: Number(powerScore.toFixed(1)),
-        ratingScore: Number(ratingScore.toFixed(1)),
-      },
-      weightedScore,
-    };
-  });
+    const quotes = await Quotation.find({ proposalId: new mongoose.Types.ObjectId(String(proposalId)) })
+      .populate('vendor');
 
-  // Update weighted score and recommendation in DB
-  for (const sq of scoredQuotes) {
-    await prisma.quotation.update({
-      where: { id: sq.id },
-      data: {
+    if (quotes.length === 0) {
+      return res.json({ quotations: [], recommendedQuotationId: null });
+    }
+
+    const w = {
+      price: weights?.price ?? 30,
+      warranty: weights?.warranty ?? 20,
+      capacity: weights?.capacity ?? 20,
+      power: weights?.power ?? 15,
+      rating: weights?.rating ?? 15,
+    };
+
+    const totalWeight = w.price + w.warranty + w.capacity + w.power + w.rating;
+
+    const minPrice = Math.min(...quotes.map((q) => q.price + q.installationCost));
+    const maxPrice = Math.max(...quotes.map((q) => q.price + q.installationCost));
+    const maxWarranty = Math.max(...quotes.map((q) => q.warrantyMonths));
+    const minWarranty = Math.min(...quotes.map((q) => q.warrantyMonths));
+    const maxCapacity = Math.max(...quotes.map((q) => q.capacityPerHour || 1));
+    const minPower = Math.min(...quotes.map((q) => q.powerConsumptionKw || 10));
+    const maxPower = Math.max(...quotes.map((q) => q.powerConsumptionKw || 10));
+
+    let bestScore = -1;
+    let recommendedId: string | null = null;
+
+    const scoredQuotes = quotes.map((q) => {
+      const totalCost = q.price + q.installationCost;
+      const priceScore = maxPrice === minPrice ? 100 : ((maxPrice - totalCost) / (maxPrice - minPrice)) * 100;
+      const warrantyScore = maxWarranty === minWarranty ? 100 : (q.warrantyMonths / maxWarranty) * 100;
+      const capacityScore = ((q.capacityPerHour || 1) / maxCapacity) * 100;
+      const powerScore = maxPower === minPower ? 100 : ((maxPower - (q.powerConsumptionKw || 10)) / (maxPower - minPower)) * 100;
+      const ratingScore = ((q.vendor?.rating || 4) / 5) * 100;
+
+      const weightedScore = Number(
+        (
+          (priceScore * w.price +
+            warrantyScore * w.warranty +
+            capacityScore * w.capacity +
+            powerScore * w.power +
+            ratingScore * w.rating) /
+          totalWeight
+        ).toFixed(2)
+      );
+
+      const quoteId = q._id.toString();
+      if (weightedScore > bestScore) {
+        bestScore = weightedScore;
+        recommendedId = quoteId;
+      }
+
+      const obj = q.toObject({ virtuals: true });
+      obj.id = quoteId;
+      return {
+        ...obj,
+        totalCost,
+        breakdownScores: {
+          priceScore: Number(priceScore.toFixed(1)),
+          warrantyScore: Number(warrantyScore.toFixed(1)),
+          capacityScore: Number(capacityScore.toFixed(1)),
+          powerScore: Number(powerScore.toFixed(1)),
+          ratingScore: Number(ratingScore.toFixed(1)),
+        },
+        weightedScore,
+      };
+    });
+
+    for (const sq of scoredQuotes) {
+      await Quotation.findByIdAndUpdate(sq.id, {
         weightedScore: sq.weightedScore,
         isRecommended: sq.id === recommendedId,
-      },
-    });
-  }
+      });
+    }
 
-  return res.json({
-    quotations: scoredQuotes,
-    recommendedQuotationId: recommendedId,
-    weights: w,
-  });
+    return res.json({
+      quotations: scoredQuotes,
+      recommendedQuotationId: recommendedId,
+      weights: w,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // Accept quotation
 router.post('/quotations/:id/accept', authenticateToken, async (req, res) => {
-  const quoteId = req.params.id as string;
-  const quote = await prisma.quotation.findUnique({
-    where: { id: quoteId },
-    include: { proposal: true, vendor: true },
-  });
+  try {
+    const quoteId = req.params.id as string;
+    const quote = await Quotation.findById(quoteId).populate('proposal').populate('vendor');
 
-  if (!quote) return res.status(404).json({ error: 'Quotation not found' });
+    if (!quote) return res.status(404).json({ error: 'Quotation not found' });
 
-  // Unset previous accepted quotes for this proposal
-  await prisma.quotation.updateMany({
-    where: { proposalId: quote.proposalId },
-    data: { isAccepted: false },
-  });
+    // Unset previous accepted quotes for this proposal
+    await Quotation.updateMany(
+      { proposalId: quote.proposalId },
+      { isAccepted: false }
+    );
 
-  const updated = await prisma.quotation.update({
-    where: { id: quoteId },
-    data: { isAccepted: true },
-  });
+    const updated = await Quotation.findByIdAndUpdate(
+      quoteId,
+      { isAccepted: true },
+      { new: true }
+    );
 
-  await logAudit({
-    userId: req.user!.id,
-    userName: req.user!.name,
-    entityType: 'QUOTATION',
-    entityId: quote.id,
-    action: 'UPDATE',
-    after: { isAccepted: true, vendorName: quote.vendor.name, price: quote.price },
-    ipAddress: req.ip,
-  });
+    await logAudit({
+      userId: req.user!.id,
+      userName: req.user!.name,
+      entityType: 'QUOTATION',
+      entityId: quote._id.toString(),
+      action: 'UPDATE',
+      after: { isAccepted: true, vendorName: quote.vendor?.name, price: quote.price },
+      ipAddress: req.ip,
+    });
 
-  return res.json(updated);
+    const obj = updated!.toObject({ virtuals: true });
+    obj.id = obj._id.toString();
+    return res.json(obj);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;

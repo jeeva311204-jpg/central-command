@@ -1,5 +1,5 @@
 # ==========================================
-# ChangeFlow Enterprise - Multi-Stage Dockerfile
+# ChangeFlow Enterprise - Multi-Stage Dockerfile (MongoDB & Mongoose)
 # ==========================================
 
 # Stage 1: Build Frontend (Vite + React + Tailwind)
@@ -10,15 +10,11 @@ RUN npm install
 COPY client/ ./
 RUN npm run build
 
-# Stage 2: Build Backend (TypeScript + Prisma) & Pre-Seed Database
+# Stage 2: Build Backend (TypeScript + Mongoose)
 FROM node:20-alpine AS server-builder
 WORKDIR /app/server
 COPY server/package*.json ./
-COPY server/prisma ./prisma/
 RUN npm install
-RUN npx prisma generate
-RUN npx prisma db push
-RUN npx tsx prisma/seed.ts
 COPY server/ ./
 RUN npm run build
 
@@ -31,16 +27,14 @@ ENV PORT=5000
 
 # Install production dependencies for server
 COPY server/package*.json ./server/
-COPY server/prisma ./server/prisma/
-RUN cd server && npm install --omit=dev && npx prisma generate
+RUN cd server && npm install --omit=dev
 
-# Copy built server, client artifacts, and seeded database
+# Copy built server and client artifacts
 COPY --from=server-builder /app/server/dist ./server/dist
 COPY --from=client-builder /app/client/dist ./client/dist
-COPY --from=server-builder /app/server/prisma/dev.db ./server/prisma/dev.db
 
 # Create storage directories
-RUN mkdir -p /app/uploads /app/server/prisma
+RUN mkdir -p /app/uploads
 
 # Expose API and Web application port
 EXPOSE 5000

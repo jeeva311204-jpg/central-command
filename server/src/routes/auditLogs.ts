@@ -1,34 +1,42 @@
 import { Router } from 'express';
-import { prisma } from '../db';
+import { AuditLog } from '../models';
 import { authenticateToken } from '../middleware/auth';
 
 const router = Router();
 
 // Get audit logs (globally or filtered by entity)
 router.get('/', authenticateToken, async (req, res) => {
-  const { entityType, entityId, action, search } = req.query;
+  try {
+    const { entityType, entityId, action, search } = req.query;
 
-  const where: any = {};
-  if (entityType) where.entityType = String(entityType);
-  if (entityId) where.entityId = String(entityId);
-  if (action) where.action = String(action);
+    const query: any = {};
+    if (entityType) query.entityType = String(entityType);
+    if (entityId) query.entityId = String(entityId);
+    if (action) query.action = String(action);
 
-  if (search) {
-    const q = String(search);
-    where.OR = [
-      { userName: { contains: q } },
-      { entityId: { contains: q } },
-      { entityType: { contains: q } },
-    ];
+    if (search) {
+      const q = String(search);
+      query.$or = [
+        { userName: { $regex: q, $options: 'i' } },
+        { entityId: { $regex: q, $options: 'i' } },
+        { entityType: { $regex: q, $options: 'i' } },
+      ];
+    }
+
+    const logs = await AuditLog.find(query)
+      .sort({ timestamp: -1 })
+      .limit(100);
+
+    const result = logs.map((l) => {
+      const obj = l.toObject({ virtuals: true });
+      obj.id = obj._id.toString();
+      return obj;
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
-
-  const logs = await prisma.auditLog.findMany({
-    where,
-    orderBy: { timestamp: 'desc' },
-    take: 100,
-  });
-
-  return res.json(logs);
 });
 
 export default router;

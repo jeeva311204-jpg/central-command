@@ -1,6 +1,23 @@
 import { Router } from 'express';
 import ExcelJS from 'exceljs';
-import { prisma } from '../db';
+import mongoose from 'mongoose';
+import {
+  Proposal,
+  ProposalType,
+  Budget,
+  User,
+  WorkflowTemplate,
+  Quotation,
+  PurchaseOrder,
+  Change4M,
+  Task,
+  Asset,
+  AuditReview,
+  DocumentModel,
+  ProposalVersion,
+  ApprovalAction,
+  getNextSequence,
+} from '../models';
 import { authenticateToken } from '../middleware/auth';
 import { validate, proposalCreateSchema } from '../middleware/validate';
 import { calculateFinancialMetrics, evaluateBudgetImpact } from '../services/financial';
@@ -11,92 +28,124 @@ import { generateProposalPdf } from '../services/pdfService';
 
 const router = Router();
 
+// Helper to attach currentStage object to proposal objects
+async function enrichProposalsWithStages(proposals: any[]) {
+  const templates = await WorkflowTemplate.find();
+  const stageMap = new Map<string, any>();
+  for (const t of templates) {
+    if (t.stages) {
+      for (const s of t.stages) {
+        stageMap.set(s._id.toString(), {
+          id: s._id.toString(),
+          _id: s._id.toString(),
+          name: s.name,
+          approverRole: s.approverRole,
+          slaDays: s.slaDays,
+          stepOrder: s.stepOrder,
+        });
+      }
+    }
+  }
+
+  return proposals.map((p) => {
+    const obj = p.toObject ? p.toObject({ virtuals: true }) : { ...p };
+    obj.id = obj._id?.toString() || obj.id;
+    if (obj.currentStageId) {
+      obj.currentStage = stageMap.get(obj.currentStageId.toString()) || null;
+    } else {
+      obj.currentStage = null;
+    }
+    return obj;
+  });
+}
+
 // Get all 14 proposal types with schemas
 router.get('/types', async (req, res) => {
-  const types = await prisma.proposalType.findMany({
-    where: { isActive: true },
-    include: {
-      formSchema: true,
-      workflowTemplate: {
-        include: {
-          stages: { orderBy: { stepOrder: 'asc' } },
-        },
-      },
-    },
-    orderBy: { code: 'asc' },
-  });
-  return res.json(types);
+  try {
+    const types = await ProposalType.find({ isActive: true })
+      .populate('workflowTemplate')
+      .sort({ code: 1 });
+    return res.json(types);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // List proposals with filtering
 router.get('/', authenticateToken, async (req, res) => {
-  const { status, departmentId, proposalTypeId, priority, search, myPendingOnly } = req.query;
+  try {
+    const { status, departmentId, proposalTypeId, priority, search, myPendingOnly } = req.query;
 
-  const where: any = {};
-  if (status) where.status = String(status);
-  if (departmentId) where.departmentId = String(departmentId);
-  if (proposalTypeId) where.proposalTypeId = String(proposalTypeId);
-  if (priority) where.priority = String(priority);
+    const query: any = {};
+    if (status) query.status = String(status);
+    if (departmentId) query.departmentId = new mongoose.Types.ObjectId(String(departmentId));
+    if (proposalTypeId) query.proposalTypeId = new mongoose.Types.ObjectId(String(proposalTypeId));
+    if (priority) query.priority = String(priority);
 
-  if (search) {
-    const q = String(search);
-    where.OR = [
-      { proposalNumber: { contains: q } },
-      { title: { contains: q } },
-      { machineName: { contains: q } },
-      { manufacturer: { contains: q } },
-    ];
-  }
+    if (search) {
+      const q = String(search);
+      query.$or = [
+        { proposalNumber: { $regex: q, $options: 'i' } },
+        { title: { $regex: q, $options: 'i' } },
+        { machineName: { $regex: q, $options: 'i' } },
+        { manufacturer: { $regex: q, $options: 'i' } },
+      ];
+    }
 
-  // If approver wants pending approvals for their role
-  if (myPendingOnly === 'true' && req.user) {
-    where.status = 'IN_REVIEW';
-    if (req.user.role !== 'Admin') {
-      where.currentStage = {
-        approverRole: req.user.role,
+    if (myPendingOnly === 'true' && req.user) {
+      query.status = 'IN_REVIEW';
+      if (req.user.role !== 'Admin') {
+        const templates = await WorkflowTemplate.find({ 'stages.approverRole': req.user.role });
+        const matchingStageIds: any[] = [];
+        for (const t of templates) {
+          for (const s of t.stages) {
+            if (s.approverRole === req.user.role) {
+              matchingStageIds.push(s._id);
+            }
+          }
+        }
+        query.currentStageId = { $in: matchingStageIds };
+      }
+    }
+
+    const proposals = await Proposal.find(query)
+      .populate('proposalType')
+      .populate('department')
+      .populate('initiator', 'name email role')
+      .sort({ createdAt: -1 });
+
+    const enriched = await enrichProposalsWithStages(proposals);
+
+    // Also populate counts for quotations, purchaseOrders, versions
+    for (const p of enriched) {
+      const [quotationsCount, poCount, verCount] = await Promise.all([
+        Quotation.countDocuments({ proposalId: p._id }),
+        PurchaseOrder.countDocuments({ proposalId: p._id }),
+        ProposalVersion.countDocuments({ proposalId: p._id }),
+      ]);
+      p._count = {
+        quotations: quotationsCount,
+        purchaseOrders: poCount,
+        versions: verCount,
       };
     }
+
+    return res.json(enriched);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
-
-  const proposals = await prisma.proposal.findMany({
-    where,
-    include: {
-      proposalType: true,
-      department: true,
-      initiator: {
-        select: { id: true, name: true, email: true, role: true },
-      },
-      currentStage: true,
-      approvalActions: {
-        include: { approver: { select: { id: true, name: true, role: true } } },
-        orderBy: { createdAt: 'desc' },
-      },
-      _count: {
-        select: {
-          quotations: true,
-          purchaseOrders: true,
-          versions: true,
-        },
-      },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
-
-  return res.json(proposals);
 });
 
 // Excel Export for Proposals List
 router.get('/export/excel', authenticateToken, async (req, res) => {
   try {
-    const proposals = await prisma.proposal.findMany({
-      include: {
-        department: true,
-        proposalType: true,
-        initiator: true,
-        currentStage: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const proposals = await Proposal.find()
+      .populate('department')
+      .populate('proposalType')
+      .populate('initiator')
+      .sort({ createdAt: -1 });
+
+    const enriched = await enrichProposalsWithStages(proposals);
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'ChangeFlow Enterprise';
@@ -122,13 +171,13 @@ router.get('/export/excel', authenticateToken, async (req, res) => {
       { header: 'Created Date', key: 'createdAt', width: 16 },
     ];
 
-    proposals.forEach((p) => {
+    enriched.forEach((p) => {
       sheet.addRow({
         proposalNumber: p.proposalNumber,
         title: p.title,
-        type: p.proposalType.name,
-        department: p.department.name,
-        initiator: p.initiator.name,
+        type: p.proposalType?.name || 'N/A',
+        department: p.department?.name || 'N/A',
+        initiator: p.initiator?.name || 'N/A',
         status: p.status,
         priority: p.priority,
         machineName: p.machineName || 'N/A',
@@ -143,13 +192,12 @@ router.get('/export/excel', authenticateToken, async (req, res) => {
       });
     });
 
-    // Style header row
     const headerRow = sheet.getRow(1);
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     headerRow.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF1E3A8A' }, // Deep Blue
+      fgColor: { argb: 'FF1E3A8A' },
     };
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -165,70 +213,81 @@ router.get('/export/excel', authenticateToken, async (req, res) => {
 
 // Get proposal details by ID
 router.get('/:id', authenticateToken, async (req, res) => {
-  const proposalId = req.params.id as string;
-  const proposal = await prisma.proposal.findUnique({
-    where: { id: proposalId },
-    include: {
-      proposalType: {
-        include: {
-          formSchema: true,
-          workflowTemplate: {
-            include: { stages: { orderBy: { stepOrder: 'asc' } } },
-          },
-        },
-      },
-      department: {
-        include: {
-          budgets: { where: { fiscalYear: 'FY2026-27' } },
-        },
-      },
-      initiator: {
-        select: { id: true, name: true, email: true, role: true },
-      },
-      currentStage: true,
-      approvalActions: {
-        include: { approver: { select: { id: true, name: true, role: true } } },
-        orderBy: { createdAt: 'asc' },
-      },
-      versions: {
-        orderBy: { versionNumber: 'desc' },
-      },
-      quotations: {
-        include: { vendor: true },
-        orderBy: { weightedScore: 'desc' },
-      },
-      purchaseOrders: {
-        include: { vendor: true, delivery: true },
-      },
-      changes4m: {
-        include: { tasks: true },
-      },
-      tasks: {
-        include: { assignedTo: true },
-      },
-      assets: {
-        include: { maintenanceSchedules: true },
-      },
-      auditReviews: {
-        orderBy: { intervalMonths: 'asc' },
-      },
-      documents: {
-        include: { uploadedBy: true },
-      },
-    },
-  });
+  try {
+    const proposalId = req.params.id as string;
+    const proposal = await Proposal.findById(proposalId)
+      .populate({
+        path: 'proposalType',
+        populate: { path: 'workflowTemplate' },
+      })
+      .populate('department')
+      .populate('initiator', 'name email role');
 
-  if (!proposal) {
-    return res.status(404).json({ error: 'Proposal not found' });
+    if (!proposal) {
+      return res.status(404).json({ error: 'Proposal not found' });
+    }
+
+    const enrichedList = await enrichProposalsWithStages([proposal]);
+    const enriched = enrichedList[0];
+
+    // Fetch related documents in parallel
+    const [
+      approvalActions,
+      versions,
+      quotations,
+      purchaseOrders,
+      changes4m,
+      tasks,
+      assets,
+      auditReviews,
+      documents,
+      departmentBudgets,
+    ] = await Promise.all([
+      ApprovalAction.find({ proposalId: proposal._id })
+        .populate('approver', 'name role')
+        .sort({ createdAt: 1 }),
+      ProposalVersion.find({ proposalId: proposal._id }).sort({ versionNumber: -1 }),
+      Quotation.find({ proposalId: proposal._id }).populate('vendor').sort({ weightedScore: -1 }),
+      PurchaseOrder.find({ proposalId: proposal._id }).populate('vendor').populate('delivery'),
+      Change4M.find({ proposalId: proposal._id }),
+      Task.find({ proposalId: proposal._id }).populate('assignedTo', 'name role'),
+      Asset.find({ proposalId: proposal._id }).populate('maintenanceSchedules'),
+      AuditReview.find({ proposalId: proposal._id }).sort({ intervalMonths: 1 }),
+      DocumentModel.find({ proposalId: proposal._id }).populate('uploadedBy', 'name role'),
+      Budget.find({ departmentId: proposal.departmentId, fiscalYear: 'FY2026-27' }),
+    ]);
+
+    // Populate tasks inside changes4m
+    const changeIds = changes4m.map((c) => c._id);
+    const changeTasks = await Task.find({ change4MId: { $in: changeIds } });
+    const changesWithTasks = changes4m.map((c) => {
+      const obj = c.toObject({ virtuals: true });
+      obj.tasks = changeTasks.filter((t) => t.change4MId?.toString() === c._id.toString());
+      return obj;
+    });
+
+    const applicableStages = await getApplicableStagesForProposal(proposal._id.toString());
+
+    if (enriched.department) {
+      enriched.department.budgets = departmentBudgets;
+    }
+
+    return res.json({
+      ...enriched,
+      approvalActions,
+      versions,
+      quotations,
+      purchaseOrders,
+      changes4m: changesWithTasks,
+      tasks,
+      assets,
+      auditReviews,
+      documents,
+      applicableStages,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
-
-  // Also calculate applicable stages based on current investment amount
-  const applicableStages = await getApplicableStagesForProposal(proposal.id);
-
-  return res.json({
-    ...proposal,
-    applicableStages,
-  });
 });
 
 // Create new proposal
@@ -266,7 +325,6 @@ router.post('/', authenticateToken, validate(proposalCreateSchema), async (req, 
       return res.status(400).json({ error: 'Title, proposal type, and department are required' });
     }
 
-    // 1. Calculate financials live
     const fin = calculateFinancialMetrics({
       purchasePrice: Number(purchasePrice) || 0,
       installationCost: Number(installationCost) || 0,
@@ -282,15 +340,11 @@ router.post('/', authenticateToken, validate(proposalCreateSchema), async (req, 
       salvageValue: Number(salvageValue) || 0,
     });
 
-    // 2. Budget evaluation check
-    const budget = await prisma.budget.findFirst({
-      where: { departmentId, fiscalYear: 'FY2026-27' },
-    });
+    const budget = await Budget.findOne({ departmentId, fiscalYear: 'FY2026-27' });
     const budgetAllocated = budget?.allocatedAmount || 10000000;
     const budgetUtilised = budget?.utilisedAmount || 0;
     const budgetCheck = evaluateBudgetImpact(budgetAllocated, budgetUtilised, fin.totalInvestment);
 
-    // Overrun block: reject submissions exceeding available budget unless override provided or privileged role
     if (
       budgetCheck.budgetImpactStatus === 'BUDGET_EXCEEDED' &&
       !req.body.allowOverrun &&
@@ -304,98 +358,91 @@ router.post('/', authenticateToken, validate(proposalCreateSchema), async (req, 
       });
     }
 
-    // 3. Generate Proposal Number (e.g. CF-2026-009)
-    const count = await prisma.proposal.count();
-    const proposalNumber = `CF-2026-${String(count + 1).padStart(3, '0')}`;
+    const seq = await getNextSequence('proposalNumber');
+    const proposalNumber = `CF-2026-${String(seq).padStart(3, '0')}`;
 
-    // 4. Find workflow template and determine initial stage
-    const workflowTemplate = await prisma.workflowTemplate.findUnique({
-      where: { proposalTypeId },
-      include: { stages: { orderBy: { stepOrder: 'asc' } } },
-    });
-
-    let initialStageId: string | null = null;
-    if (workflowTemplate && workflowTemplate.stages.length > 0) {
-      // Find the first stage (always HOD)
-      initialStageId = workflowTemplate.stages[0].id;
+    const workflowTemplate = await WorkflowTemplate.findOne({ proposalTypeId });
+    let initialStageId: any = null;
+    let initialStage: any = null;
+    if (workflowTemplate && workflowTemplate.stages && workflowTemplate.stages.length > 0) {
+      initialStage = workflowTemplate.stages[0];
+      initialStageId = initialStage._id;
     }
 
-    // 5. Create proposal
-    const proposal = await prisma.proposal.create({
-      data: {
-        proposalNumber,
-        title,
-        proposalTypeId,
-        departmentId,
-        initiatorId: req.user!.id,
-        currentStageId: initialStageId,
-        status: initialStageId ? 'IN_REVIEW' : 'DRAFT',
-        priority: priority || 'MEDIUM',
-        machineName,
-        category,
-        manufacturer,
-        supplier,
-        currentMachineDetails,
-        proposedMachineDetails,
-        expectedDeliveryWeeks: Number(expectedDeliveryWeeks) || 4,
-        purchasePrice: Number(purchasePrice) || 0,
-        installationCost: Number(installationCost) || 0,
-        transportCost: Number(transportCost) || 0,
-        trainingCost: Number(trainingCost) || 0,
-        toolingCost: Number(toolingCost) || 0,
-        otherCost: Number(otherCost) || 0,
-        totalInvestment: fin.totalInvestment,
-        usefulLifeYears: Number(usefulLifeYears) || 5,
-        discountRate: Number(discountRate) || 10,
-        salvageValue: Number(salvageValue) || 0,
-        annualSavings: Number(annualSavings) || 0,
-        extraRevenue: Number(extraRevenue) || 0,
-        extraOpex: Number(extraOpex) || 0,
-        annualNetBenefit: fin.annualNetBenefit,
-        simplePayback: fin.simplePayback,
-        roiPercent: fin.roiPercent,
-        npv: fin.npv,
-        irr: fin.irr,
-        discountedPayback: fin.discountedPayback,
-        annualDepreciation: fin.annualDepreciation,
-        budgetImpactStatus: budgetCheck.budgetImpactStatus,
-        bettermentJson: bettermentJson ? (typeof bettermentJson === 'string' ? bettermentJson : JSON.stringify(bettermentJson)) : null,
-        customFieldsJson: customFieldsJson ? (typeof customFieldsJson === 'string' ? customFieldsJson : JSON.stringify(customFieldsJson)) : null,
-      },
-      include: {
-        currentStage: true,
-        department: true,
-      },
+    let bettermentObj: any = {};
+    if (bettermentJson) {
+      bettermentObj = typeof bettermentJson === 'string' ? JSON.parse(bettermentJson) : bettermentJson;
+    }
+    let customFieldsObj: any = {};
+    if (customFieldsJson) {
+      customFieldsObj = typeof customFieldsJson === 'string' ? JSON.parse(customFieldsJson) : customFieldsJson;
+    }
+
+    const proposal = await Proposal.create({
+      proposalNumber,
+      title,
+      proposalTypeId,
+      departmentId,
+      initiatorId: req.user!.id,
+      currentStageId: initialStageId,
+      status: initialStageId ? 'IN_REVIEW' : 'DRAFT',
+      priority: priority || 'MEDIUM',
+      machineName,
+      category,
+      manufacturer,
+      supplier,
+      currentMachineDetails,
+      proposedMachineDetails,
+      expectedDeliveryWeeks: Number(expectedDeliveryWeeks) || 4,
+      purchasePrice: Number(purchasePrice) || 0,
+      installationCost: Number(installationCost) || 0,
+      transportCost: Number(transportCost) || 0,
+      trainingCost: Number(trainingCost) || 0,
+      toolingCost: Number(toolingCost) || 0,
+      otherCost: Number(otherCost) || 0,
+      totalInvestment: fin.totalInvestment,
+      usefulLifeYears: Number(usefulLifeYears) || 5,
+      discountRate: Number(discountRate) || 10,
+      salvageValue: Number(salvageValue) || 0,
+      annualSavings: Number(annualSavings) || 0,
+      extraRevenue: Number(extraRevenue) || 0,
+      extraOpex: Number(extraOpex) || 0,
+      annualNetBenefit: fin.annualNetBenefit,
+      simplePayback: fin.simplePayback,
+      roiPercent: fin.roiPercent,
+      npv: fin.npv,
+      irr: fin.irr,
+      discountedPayback: fin.discountedPayback,
+      annualDepreciation: fin.annualDepreciation,
+      budgetImpactStatus: budgetCheck.budgetImpactStatus,
+      betterment: bettermentObj,
+      customFields: customFieldsObj,
     });
 
-    // 6. Log audit
     await logAudit({
       userId: req.user!.id,
       userName: req.user!.name,
       entityType: 'PROPOSAL',
-      entityId: proposal.id,
+      entityId: proposal._id.toString(),
       action: 'CREATE',
       after: { proposalNumber, totalInvestment: fin.totalInvestment, title },
       ipAddress: req.ip,
     });
 
-    // 7. Notify HOD of new proposal submission
-    if (proposal.currentStage) {
-      const hodUsers = await prisma.user.findMany({
-        where: {
-          role: { name: proposal.currentStage.approverRole },
-          departmentId: proposal.departmentId,
-          isActive: true,
-        },
+    if (initialStage) {
+      const hodUsers = await User.find({
+        roleName: initialStage.approverRole,
+        departmentId: proposal.departmentId,
+        isActive: true,
       });
 
       for (const hod of hodUsers) {
         await createNotification(
-          hod.id,
+          hod._id.toString(),
           `New Proposal for Approval: ${proposal.proposalNumber}`,
           `${req.user!.name} raised proposal "${proposal.title}" (₹${proposal.totalInvestment.toLocaleString('en-IN')}) for your approval.`,
           'APPROVAL',
-          `/proposals/${proposal.id}`
+          `/proposals/${proposal._id}`
         );
 
         await sendSimulatedEmail(
@@ -408,7 +455,11 @@ router.post('/', authenticateToken, validate(proposalCreateSchema), async (req, 
       }
     }
 
-    return res.status(201).json(proposal);
+    const populated = await Proposal.findById(proposal._id)
+      .populate('department')
+      .populate('proposalType');
+    const enrichedList = await enrichProposalsWithStages([populated]);
+    return res.status(201).json(enrichedList[0]);
   } catch (err: any) {
     console.error('Error creating proposal:', err);
     return res.status(500).json({ error: err.message || 'Failed to create proposal' });
@@ -419,10 +470,7 @@ router.post('/', authenticateToken, validate(proposalCreateSchema), async (req, 
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const proposalId = req.params.id as string;
-    const existing = await prisma.proposal.findUnique({
-      where: { id: proposalId },
-      include: { currentStage: true },
-    });
+    const existing = await Proposal.findById(proposalId);
 
     if (!existing) {
       return res.status(404).json({ error: 'Proposal not found' });
@@ -470,8 +518,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
       salvageValue: salvageValue !== undefined ? Number(salvageValue) : existing.salvageValue,
     });
 
-    const budget = await prisma.budget.findFirst({
-      where: { departmentId: existing.departmentId, fiscalYear: 'FY2026-27' },
+    const budget = await Budget.findOne({
+      departmentId: existing.departmentId,
+      fiscalYear: 'FY2026-27',
     });
     const budgetAllocated = budget?.allocatedAmount || 10000000;
     const budgetUtilised = budget?.utilisedAmount || 0;
@@ -511,34 +560,33 @@ router.put('/:id', authenticateToken, async (req, res) => {
     };
 
     if (bettermentJson) {
-      updateData.bettermentJson = typeof bettermentJson === 'string' ? bettermentJson : JSON.stringify(bettermentJson);
+      updateData.betterment = typeof bettermentJson === 'string' ? JSON.parse(bettermentJson) : bettermentJson;
     }
     if (customFieldsJson) {
-      updateData.customFieldsJson = typeof customFieldsJson === 'string' ? customFieldsJson : JSON.stringify(customFieldsJson);
+      updateData.customFields = typeof customFieldsJson === 'string' ? JSON.parse(customFieldsJson) : customFieldsJson;
     }
 
-    // If revision was requested and initiator is resubmitting, advance status back to IN_REVIEW
     if (existing.status === 'REVISION_REQUESTED' && resubmitForApproval) {
       updateData.status = 'IN_REVIEW';
     }
 
-    const updated = await prisma.proposal.update({
-      where: { id: proposalId },
-      data: updateData,
-    });
+    const updated = await Proposal.findByIdAndUpdate(proposalId, updateData, { new: true })
+      .populate('department')
+      .populate('proposalType');
 
     await logAudit({
       userId: req.user!.id,
       userName: req.user!.name,
       entityType: 'PROPOSAL',
-      entityId: existing.id,
+      entityId: existing._id.toString(),
       action: 'UPDATE',
       before: { totalInvestment: existing.totalInvestment, status: existing.status },
-      after: { totalInvestment: fin.totalInvestment, status: updated.status },
+      after: { totalInvestment: fin.totalInvestment, status: updated?.status },
       ipAddress: req.ip,
     });
 
-    return res.json(updated);
+    const enrichedList = await enrichProposalsWithStages([updated]);
+    return res.json(enrichedList[0]);
   } catch (err: any) {
     console.error('Error updating proposal:', err);
     return res.status(500).json({ error: err.message || 'Failed to update proposal' });
@@ -549,25 +597,26 @@ router.put('/:id', authenticateToken, async (req, res) => {
 router.get('/:id/pdf', async (req, res) => {
   try {
     const proposalId = req.params.id as string;
-    const proposal = await prisma.proposal.findUnique({
-      where: { id: proposalId },
-      include: {
-        proposalType: true,
-        department: true,
-        initiator: true,
-        currentStage: true,
-        approvalActions: {
-          include: { approver: true },
-          orderBy: { createdAt: 'asc' },
-        },
-      },
-    });
+    const proposal = await Proposal.findById(proposalId)
+      .populate('proposalType')
+      .populate('department')
+      .populate('initiator');
 
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
 
-    const doc = generateProposalPdf(proposal);
+    const approvalActions = await ApprovalAction.find({ proposalId: proposal._id })
+      .populate('approver')
+      .sort({ createdAt: 1 });
+
+    const enrichedList = await enrichProposalsWithStages([proposal]);
+    const enriched = {
+      ...enrichedList[0],
+      approvalActions,
+    };
+
+    const doc = generateProposalPdf(enriched as any);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${proposal.proposalNumber}-Dossier.pdf"`);

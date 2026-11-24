@@ -1,12 +1,45 @@
 import PDFDocument from 'pdfkit';
-import { Proposal, Department, User, WorkflowStage, ApprovalAction, ProposalType } from '@prisma/client';
 
-type FullProposal = Proposal & {
-  proposalType: ProposalType;
-  department: Department;
-  initiator: User;
-  currentStage: WorkflowStage | null;
-  approvalActions: (ApprovalAction & { approver: User })[];
+export type FullProposal = {
+  id: string;
+  proposalNumber: string;
+  title: string;
+  status: string;
+  priority: string;
+  machineName?: string;
+  category?: string;
+  manufacturer?: string;
+  supplier?: string;
+  currentMachineDetails?: string;
+  expectedDeliveryWeeks?: number;
+  purchasePrice?: number;
+  installationCost?: number;
+  transportCost?: number;
+  trainingCost?: number;
+  toolingCost?: number;
+  createdAt: Date | string;
+  totalInvestment: number;
+  annualSavings: number;
+  annualNetBenefit: number;
+  simplePayback: number;
+  roiPercent: number;
+  npv: number;
+  irr: number;
+  discountedPayback: number;
+  annualDepreciation: number;
+  budgetImpactStatus: string;
+  bettermentJson?: string | null;
+  proposalType?: { name: string };
+  department?: { name: string; code?: string };
+  initiator?: { name: string; email?: string; role?: string };
+  currentStage?: { name: string; approverRole?: string } | null;
+  approvalActions?: Array<{
+    action: string;
+    stageName?: string;
+    comments?: string;
+    createdAt: Date | string;
+    approver?: { name: string; email?: string; role?: string };
+  }>;
 };
 
 export function generateProposalPdf(proposal: FullProposal): PDFKit.PDFDocument {
@@ -32,14 +65,14 @@ export function generateProposalPdf(proposal: FullProposal): PDFKit.PDFDocument 
   doc.fillColor('#0f172a').fontSize(9).text(proposal.priority, 275, y);
 
   doc.fillColor('#64748b').fontSize(9).text('DEPARTMENT:', 370, y);
-  doc.fillColor('#0f172a').fontSize(9).text(proposal.department.name, 450, y);
+  doc.fillColor('#0f172a').fontSize(9).text(proposal.department?.name || 'N/A', 450, y);
   y += 20;
 
   doc.fillColor('#64748b').fontSize(9).text('INITIATOR:', 40, y);
-  doc.fillColor('#0f172a').fontSize(9).text(proposal.initiator.name, 95, y);
+  doc.fillColor('#0f172a').fontSize(9).text(proposal.initiator?.name || 'N/A', 95, y);
 
   doc.fillColor('#64748b').fontSize(9).text('TYPE:', 220, y);
-  doc.fillColor('#0f172a').fontSize(9).text(proposal.proposalType.name, 255, y);
+  doc.fillColor('#0f172a').fontSize(9).text(proposal.proposalType?.name || 'N/A', 255, y);
 
   doc.fillColor('#64748b').fontSize(9).text('DATE:', 370, y);
   doc.fillColor('#0f172a').fontSize(9).text(new Date(proposal.createdAt).toLocaleDateString(), 450, y);
@@ -70,12 +103,12 @@ export function generateProposalPdf(proposal: FullProposal): PDFKit.PDFDocument 
   y += 28;
 
   const costItems = [
-    ['Purchase Base Price', `₹${proposal.purchasePrice.toLocaleString('en-IN')}`],
-    ['Installation & Civil Works', `₹${proposal.installationCost.toLocaleString('en-IN')}`],
-    ['Freight & Transport', `₹${proposal.transportCost.toLocaleString('en-IN')}`],
-    ['Operator & Maintenance Training', `₹${proposal.trainingCost.toLocaleString('en-IN')}`],
-    ['Tooling, Jigs & Fixtures', `₹${proposal.toolingCost.toLocaleString('en-IN')}`],
-    ['TOTAL SANCTIONED INVESTMENT', `₹${proposal.totalInvestment.toLocaleString('en-IN')}`],
+    ['Purchase Base Price', `₹${(proposal.purchasePrice || 0).toLocaleString('en-IN')}`],
+    ['Installation & Civil Works', `₹${(proposal.installationCost || 0).toLocaleString('en-IN')}`],
+    ['Freight & Transport', `₹${(proposal.transportCost || 0).toLocaleString('en-IN')}`],
+    ['Operator & Maintenance Training', `₹${(proposal.trainingCost || 0).toLocaleString('en-IN')}`],
+    ['Tooling, Jigs & Fixtures', `₹${(proposal.toolingCost || 0).toLocaleString('en-IN')}`],
+    ['TOTAL SANCTIONED INVESTMENT', `₹${(proposal.totalInvestment || 0).toLocaleString('en-IN')}`],
   ];
 
   costItems.forEach(([label, val], idx) => {
@@ -170,7 +203,7 @@ export function generateProposalPdf(proposal: FullProposal): PDFKit.PDFDocument 
       doc.fillColor('#0f172a').fontSize(9).text(`${action.stageName} — ${action.action}`, 50, y, { bold: true } as any);
       doc.fillColor('#64748b').fontSize(8).text(new Date(action.createdAt).toLocaleString(), 400, y, { align: 'right' });
       y += 13;
-      doc.fillColor('#475569').fontSize(8).text(`Approver: ${action.approver.name} (${action.approver.email}) | Comments: "${action.comments || 'Approved'}"`, 60, y);
+      doc.fillColor('#475569').fontSize(8).text(`Approver: ${action.approver?.name || 'Authorized Approver'} (${action.approver?.email || action.approver?.role || 'Staff'}) | Comments: "${action.comments || 'Approved'}"`, 60, y);
       y += 18;
     });
   } else {

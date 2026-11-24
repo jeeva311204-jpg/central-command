@@ -5,9 +5,9 @@
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://reactjs.org/)
 [![Vite](https://img.shields.io/badge/Vite-6.0-646cff.svg)](https://vitejs.dev/)
 [![Express](https://img.shields.io/badge/Express-4.21-000000.svg)](https://expressjs.com/)
-[![Prisma](https://img.shields.io/badge/Prisma-5.22-2D3748.svg)](https://www.prisma.io/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-Atlas%20%2F%20Mongoose-47A248.svg)](https://www.mongodb.com/)
 [![TailwindCSS](https://img.shields.io/badge/TailwindCSS-3.4-38bdf8.svg)](https://tailwindcss.com/)
-[![Tests](https://img.shields.io/badge/Tests-9%2F9%20Passing-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-10%2F10%20Passing-success.svg)]()
 
 ---
 
@@ -33,8 +33,11 @@
 │                       BACKEND: Node.js + Express + TypeScript                    │
 ├──────────────────────────────────────────────────────────────────────────────────┤
 │ • RBAC Middleware (9 Roles) & Multer File Uploads (Type & Size Validation)       │
+│ • Security Layer: express-mongo-sanitize & Zod NoSQL Injection Guards            │
 │ • Core Workflow Engine: Threshold Rules (≤₹1L, ₹1L-₹10L, >₹10L), Delegation,     │
 │   SLA Escalation Engine & Revision Snapshot Versioning                           │
+│ • Multi-Document ACID Transactions (session.withTransaction): Approvals, POs,   │
+│   Asset Auto-Registration & Commissioning                                        │
 │ • Financial Evaluation Service: Total Cost, Net Benefit, Simple Payback, ROI,    │
 │   NPV, IRR (Newton-Raphson), Discounted Payback, Straight-Line Depreciation      │
 │ • Procurement Service: Weighted Quotation Scoring, Best-Value Recommendation,    │
@@ -42,17 +45,18 @@
 │ • Asset Lifecycle Service: Auto-Asset Creation → Warranty Expiration Reminders    │
 │   & Preventive Maintenance Schedules (Calendar / Operating Hours)                │
 │ • Post-Investment Audit Engine: 3, 6, 12-Month Variance Tracking vs Targets      │
-│ • Notification & Simulated Email Dispatcher                                      │
-│ • Immutable Audit Logger (Who / What / When / Before / After JSON Diffs)         │
-│ • PDF Generation Service: High-Resolution Executive Proposal Dossier (pdfkit)    │
+│ • Notification & Nodemailer / Simulated Email Dispatcher                         │
+│ • Immutable Audit Logger (Mongoose Pre-Hooks blocking Update & Delete)           │
+│ • PDF & Excel Generation Services: Dossiers & Multi-Sheet Excel Workbooks        │
 └──────────────────────────────────────┬───────────────────────────────────────────┘
-                                       │ Prisma ORM
+                                       │ Mongoose ODM
 ┌──────────────────────────────────────▼───────────────────────────────────────────┐
-│                      DATABASE: SQLite (Portable to PostgreSQL)                   │
-│   24 Relational Models: User, Role, Department, Budget, Proposal, Version,       │
-│   WorkflowTemplate, WorkflowStage, ApprovalAction, Delegation, ChecklistTemplate,│
-│   ChecklistItem, Task, Change4M, Vendor, Quotation, PurchaseOrder, Delivery,     │
-│   Asset, MaintenanceSchedule, AuditReview, Document, Notification, AuditLog      │
+│              DATABASE: MongoDB Atlas (Replica Set / Multi-Document ACID)         │
+│   25 Collections: User, Role, Department, Budget, Proposal, ProposalVersion,     │
+│   WorkflowTemplate, ApprovalAction, Delegation, ChecklistTemplate, Task,         │
+│   Change4M, Vendor, Quotation, PurchaseOrder, Delivery, Asset,                   │
+│   MaintenanceSchedule, AuditReview, DocumentModel, Notification, SimulatedEmail, │
+│   AuditLog, Counter                                                              │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -63,23 +67,48 @@
 ### Prerequisites
 - Node.js >= 18
 - npm >= 9
+- A running MongoDB instance (Local MongoDB or MongoDB Atlas)
 
-### 1. Install & Seed
+### 1. Environment Configuration
+Create a `.env` file in the project root (or inside `server/`):
 ```bash
-# Seed database with 5 departments, 10 users, budgets, 6 vendors, 8 proposals & assets
+cp .env.example .env
+```
+Set your `MONGODB_URI`:
+```env
+PORT=5000
+NODE_ENV=development
+JWT_SECRET=changeflow-enterprise-hackathon-jwt-secret-key-2026-secure!
+MONGODB_URI=mongodb://127.0.0.1:27017/changeflow
+SLA_CRON_SCHEDULE=0 * * * *
+```
+
+#### Using MongoDB Atlas (Free Tier):
+1. Sign in to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas).
+2. Create a free **M0 Sandbox** cluster (comes with automatic replica set support for multi-document ACID transactions).
+3. Under **Security → Network Access**, add `0.0.0.0/0` (Allow Access from Anywhere) or your server IP.
+4. Under **Security → Database Access**, create a user with read/write privileges.
+5. Click **Connect → Drivers** and copy the connection string into `.env`:
+   ```env
+   MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.abcde.mongodb.net/changeflow?retryWrites=true&w=majority
+   ```
+
+### 2. Seed Database
+```bash
+# Seed MongoDB with 5 departments, 10 users, budgets, 14 proposal types, 6 vendors, 8 proposals & assets
 npm run seed
 ```
 
-### 2. Run the Platform
+### 3. Run the Platform
 ```bash
-# Concurrently starts both backend (port 5000) and frontend (port 5173)
+# Concurrently starts both backend API (port 5000) and frontend (port 5173)
 npm run dev
 ```
 Open **[http://localhost:5173](http://localhost:5173)** in your browser.
 
-### 3. Run Unit Tests
+### 4. Run Test Suite
 ```bash
-# Runs financial evaluation and workflow threshold routing tests
+# Runs full test suite using mongodb-memory-server
 npm test
 ```
 
@@ -88,7 +117,7 @@ npm test
 ## 👥 Demo Logins & Roles
 
 > **Password for all demo accounts:** `ChangeFlow2026!`  
-> *(Note: The top navigation bar also includes an **Instant 1-Click Demo Persona Switcher** dropdown for effortless judging during live presentations!)*
+> *(Note: The top navigation bar includes an **Instant 1-Click Demo Persona Switcher** dropdown for effortless judging during live presentations!)*
 
 | Persona | Role | Department | Email | Focus & Privileges |
 | :--- | :--- | :--- | :--- | :--- |
@@ -98,191 +127,59 @@ npm test
 | **Vikram Patel** | **Finance** | Production | `finance.lead@changeflow.com` | Financial viability signoff, IRR/NPV & budget audit |
 | **Meera Iyer** | **Procurement** | Logistics | `procure.head@changeflow.com` | Vendor quotation scoring, recommended quotes, PO issue |
 | **Suresh Nair** | **Quality** | Quality Assurance | `qa.lead@changeflow.com` | 4M change inspection, FAT & metrology verification |
-| **Manoj Kumar** | **Maintenance** | Maintenance | `maint.lead@changeflow.com` | Asset warranties (< 30d alerts), preventive maintenance |
-| **Rahul Singh** | **Employee** | Production | `operator1@changeflow.com` | Shop floor operator, raises proposals & 4M changes |
-| **Priya Das** | **Employee** | Maintenance | `operator2@changeflow.com` | Maintenance technician executing checklist tasks |
-| **System Admin** | **Admin** | Engineering | `admin@changeflow.com` | Full system overrides, threshold matrix & stage editor |
-
----
-
-## 🎯 5-Minute Hackathon Demo Script (For Judges)
-
-### Minute 1: The Executive CAPEX Dashboard (Aditya Birla - Management)
-1. Log in as **Director (Aditya Birla)** or switch to **Management** via the top persona switcher.
-2. View the **Executive Command Center**:
-   - Total CAPEX Budget (₹10.50 Cr allocated, ₹3.60 Cr utilised)
-   - Department-wise Spend & Budget Distribution Bar Chart (Recharts)
-   - Category Distribution Donut Chart
-   - **SLA Breach Alert Table**: Observe proposal `CF-2026-006` flagged as overdue by 7 days.
-   - Click the proposal `CF-2026-001` (₹48.5L Makino 5-Axis Milling Center) pending Management Sanction.
-
-### Minute 2: Proposal Dossier, Workflow Pipeline & PDF Export
-1. On the **Proposal Dossier** page:
-   - Observe the visual **Workflow Approval Pipeline**: Stage 1 (HOD) → Stage 2 (Technical) → Stage 3 (Finance) → Stage 4 (Procurement) are checked in green with approval comments.
-   - Stage 5 (**Management Sanction**) is highlighted as currently active.
-   - Inspect the **Live DCF Financials**: Total Investment: ₹48,50,000 | Simple Payback: 2.20 Years | ROI: 45.36% | NPV @ 10%: ₹61.12 Lakhs | IRR: 41.20%.
-   - Click the **5-Pillar Betterment Analysis** tab: See comparative metrics across Production, Financial, Quality, Manpower, and Safety/Maintenance.
-   - Click **"Export PDF Dossier"**: Instantly generates an official executive PDF dossier with company header, cost breakdown, financial feasibility, betterment analysis, and the digital audit trail.
-   - Click **"Review & Act as Management"**: Enter comments and click **Approve**! The proposal advances to **APPROVED** and department budget utilisation is updated automatically.
-
-### Minute 3: Vendor Quotation Comparison & Machine Matrix
-1. Go to **Procurement → Quotation Comparison** in the sidebar:
-   - View the side-by-side comparison of **Makino CNC** vs **DMG Mori Precision**.
-   - Adjust the **Scoring Weight Sliders** (Price, Warranty, Capacity, Power, Vendor Rating). Notice how the composite score and "Recommended Vendor" badge recalculate dynamically!
-2. Go to **Procurement → Machine Comparison**:
-   - Compare 4 competitive machines side-by-side (Makino vs DMG Mori vs LMW vs Fanuc).
-   - Notice the **best value per row highlighted in green** (Lowest Price, Lowest Installation, Highest Output, Most Efficient Power, Fastest Payback).
-3. Go to **Procurement → Purchase Orders**:
-   - Click **"Generate PO from Approved Proposal"** to issue an official PO with payment terms.
-   - Advance PO status from `CREATED` → `DISPATCHED` → `DELIVERED` → `INVOICED` → `PAID`.
-
-### Minute 4: Delivery, Commissioning & Auto-Asset Registration
-1. Navigate to **Delivery & Commissioning**:
-   - Walk through the 5-stage handover: Delivery → Installation → Commissioning → Operator Training → Dual Signoff.
-   - Click **"Final Signoff & Auto-Register Asset"**: Sign off with physical serial number and location.
-   - Switch to **Asset Register & AMC**: Notice the machine is **automatically registered** with its asset code (e.g. `AST-PROD-001`), serial number, and warranty expiry date.
-   - Observe the **Urgent Warranty Expiration Banner** alerting that `AST-PROD-001` OEM warranty expires in 14 days!
-   - Mark a preventive maintenance task as completed with 1 click.
-
-### Minute 5: 4M Change Management & Post-Investment Audit
-1. Navigate to **4M Change Requests**:
-   - Click on the MQL Lubrication change.
-   - Inspect the interactive **5×5 Severity × Probability Risk Matrix** (Severity 3 × Probability 2 = Risk Score 6).
-   - Check off an implementation task assigned to an operator.
-   - Click **"Signoff & Close Change"** to record formal closure notes.
-2. Navigate to **Post-Investment Audits**:
-   - View the **Projected vs Actual Cost Savings Chart** at 3, 6, and 12-month review milestones.
-   - Inspect proposal `CF-2026-007` which achieved 110% of targeted savings (₹4.95 Lakhs realized vs ₹4.50 Lakhs target).
-3. Check the **Simulated Email Log** and **Audit Trail**:
-   - View the immutable audit log displaying exact before/after JSON diffs.
-   - View the simulated corporate email log displaying automated transactional alerts.
-
----
-
-## 📦 Data Model Overview (24 Prisma Models)
-
-1. `User`: Role, Department, Contact info, Authentication hash
-2. `Role`: 9 industrial roles (Admin, Management, HOD, Engineer, Finance, Procurement, Quality, Maintenance, Employee)
-3. `Department`: 5 production departments (PROD, MAINT, QA, ENG, LOG)
-4. `Budget`: Departmental allocations and real-time utilised amounts for FY2026-27
-5. `ProposalType`: 14 industrial categories (New Machine, Replacement, Automation, etc.)
-6. `FormSchema`: Configurable dynamic form fields and required financial fields per type
-7. `WorkflowTemplate`: Data-driven approval pipeline templates
-8. `WorkflowStage`: Ordered steps with approver roles, SLA days, threshold limits & condition expressions
-9. `Proposal`: Central CAPEX dossier with technical specs, cost breakdown, DCF metrics, and 5-pillar betterment analysis
-10. `ProposalVersion`: Immutable historical snapshots captured whenever an approver requests revisions
-11. `ApprovalAction`: Formal audit actions (APPROVE, REJECT, REQUEST_REVISION, DELEGATE) with comments
-12. `Delegation`: Temporary approval authority transfer with start/end date and reason
-13. `ChecklistTemplate`: Evaluation, implementation, commissioning and verification templates
-14. `ChecklistItem`: Mandatory compliance items assigned to default roles
-15. `Task`: Shop-floor implementation tasks with due dates, assignees, and completion timestamps
-16. `Change4M`: 4M changes (Man, Machine, Material, Method) with quantitative 5×5 risk matrix
-17. `Vendor`: Suppliers with ratings (1-5), purchase history, and machinery specialties
-18. `Quotation`: Vendor proposals with multi-factor scoring (price, warranty, capacity, power, rating)
-19. `PurchaseOrder`: SCM purchase orders with status lifecycle (Created → Dispatched → Delivered → Invoiced → Paid)
-20. `Delivery`: 5-step delivery, installation, commissioning, training and signoff pipeline
-21. `Asset`: Auto-registered commissioned machinery with asset codes, serial numbers and warranty dates
-22. `MaintenanceSchedule`: Preventive maintenance scheduler (Calendar days / Operating hours)
-23. `AuditReview`: 3, 6, 12-month post-investment audits comparing actual output/savings vs targets
-24. `Document`: Document repository storing quotations, specs, invoices and certificates
-25. `Notification`: In-app notifications with unread counts
-26. `SimulatedEmail`: Automated transactional email dispatch log
-27. `AuditLog`: Immutable system audit trail capturing who, what, when, before JSON, and after JSON
-
----
-
-## 🛡️ Enterprise Hardening & Verification Report (10/10 PASS)
-
-ChangeFlow Enterprise underwent systematic hardening and security verification. Every checklist requirement is verified by dedicated automated tests:
-
-| # | Hardening Requirement | Status | Verification & Test File | Implementation Summary |
-| :-: | :--- | :---: | :--- | :--- |
-| **1** | **Workflow-as-Data** | **PASS** | `src/tests/workflowAsData.test.ts` | Removed all hardcoded thresholds from code. Stages evaluate pure database configuration (`minAmount`, `maxAmount`, `conditionExpr`). Admin UI updates instantly take effect on routing without restart. |
-| **2** | **SLA Escalation Automation** | **PASS** | `src/tests/slaEscalation.test.ts` | Scheduled background cron runner via `node-cron` with customizable schedule (`SLA_CRON_SCHEDULE`). Manual demo trigger retained at `POST /api/workflows/sla-check`. Tested with overdue fixtures. |
-| **3** | **Audit Integrity & Immutability** | **PASS** | `src/tests/auditIntegrity.test.ts` | `ProposalVersion` configured with `onDelete: Restrict` (prevents cascading deletes). Zero update/delete API routes exist for `AuditLog` or `ProposalVersion`. Tamper-resistant audit trail. |
-| **4** | **Server Authorization & Role Security** | **PASS** | `src/tests/authorization.test.ts` | Role-based authorization enforced across all protected endpoints. Roles verified exclusively from cryptographically signed JWT token; client-side header/body role spoofing attempts rejected with `403 Forbidden`. |
-| **5** | **Edge Cases Suite** | **PASS** | `src/tests/edgeCases.test.ts` | Covers: 1) Revision request creating version snapshots & resubmission, 2) Rejection cleanly terminating proposals at each of the 5 stages, 3) Expired delegation authorization block, 4) Budget overrun submission blocking, 5) Optimistic concurrency race condition block. |
-| **6** | **Security Hardening** | **PASS** | `src/tests/security.test.ts` | Passwords hashed with bcrypt (salt rounds 10). Production startup assertion enforcing non-empty `JWT_SECRET`. Rate limiting (`express-rate-limit`) on login. Input validation with Zod schemas. Upload pipeline blocks `.exe`, `.sh`, `.bat` and enforces 10MB limit. |
-| **7** | **Real Email Notifications (Nodemailer)** | **PASS** | `src/tests/emailNotification.test.ts` | Nodemailer SMTP integration via environment variables (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`). Seamless fallback to persistent `SimulatedEmail` database log for offline testing & audit review. |
-| **8** | **Excel Export (CAPEX & Proposals)** | **PASS** | `src/tests/excelExport.test.ts` | Generates official multi-sheet Excel workbooks (`exceljs`) for CAPEX Dashboard (KPIs, Department Budgets, Pipeline) and Proposals Register (16 financial & betterment columns). One-click download buttons on UI. |
-| **9** | **Mobile Responsiveness (375px)** | **PASS** | `client run build` (Verified) | Responsive card-based view for Approver Queue on mobile screens (< 640px) eliminating horizontal overflow. Horizontally scrollable tabs on Proposal Dossier. Full-width touch-friendly action buttons. |
-| **10** | **Deployment Ready** | **PASS** | Dockerfile, compose, render, railway | Multi-stage Dockerfile, `docker-compose.yml` with persistent volumes, `.env.example`, `render.yaml`, `railway.json`, and single-command production start. |
+| **Manoj Kumar** | **Maintenance** | Plant Maintenance | `maint.lead@changeflow.com` | Asset register, warranty expirations, preventive maintenance |
+| **Rahul Singh** | **Employee** | Production | `operator1@changeflow.com` | Raise CAPEX proposals, submit 4M change requests |
+| **System Admin** | **Admin** | Engineering | `admin@changeflow.com` | Full platform administration, threshold editor, user delegation |
 
 ---
 
 ## 🚀 Deployment Guide
 
-### Option 1: Docker & Docker Compose (Recommended for Production)
-Build and run the entire platform (client + backend + SQLite database + static storage) in an isolated container:
+### Option 1: Docker & Docker Compose (Zero-Setup)
+Spin up MongoDB with replica set + ChangeFlow Enterprise in one command:
 
 ```bash
-# 1. Build and run with Docker Compose
+# 1. Build and start containers
 docker compose up -d --build
 
 # 2. View logs
 docker compose logs -f
 
 # 3. Access platform
-# Web & API are available at http://localhost:5000
+# Web & API are live at http://localhost:5000
 ```
 
-### Option 2: One-Click Cloud Deployment (Render / Railway)
-- **Render**: Connect repository. Render detects `render.yaml` and deploys the unified Node.js web service with persistent disk.
-- **Railway**: Connect repository. Railway detects `Dockerfile` and `railway.json` and deploys automatically.
-
-### Option 3: Production Build from Source
-```bash
-# 1. Install all dependencies
-npm run install:all
-
-# 2. Configure environment
-cp .env.example .env
-
-# 3. Generate Prisma client & Seed data
-npm --prefix server run prisma:generate
-npm run seed
-
-# 4. Build both frontend and backend
-npm run build
-
-# 5. Start production server (serves frontend SPA & backend REST API on port 5000)
-npm start
-```
+### Option 2: Cloud Deployment (Render / Railway)
+- **Render**: Connect your GitHub repository. Set `NODE_ENV=production`, `MONGODB_URI` (Atlas connection string), and `JWT_SECRET`. Render builds and runs the containerized app.
+- **Railway**: Connect repository. Attach a MongoDB plugin or provide Atlas `MONGODB_URI`. Deploy with one click.
 
 ---
 
-## 🧪 Unit Testing Suite
-
-ChangeFlow Enterprise includes automated unit tests covering both the **Financial Evaluation Engine** and the **Workflow Threshold Routing Engine**:
+## 🧪 Automated Test Suite
 
 ```bash
 npm test
 ```
 
-### Tests Covered:
-- **Financial Engine (`server/src/tests/financial.test.ts`)**:
-  - Total investment calculation including all auxiliary costs (installation, transport, training, tooling)
-  - Annual net benefit (savings + extra revenue - extra opex)
-  - Simple payback period and ROI %
-  - Straight-line depreciation calculation
-  - Net Present Value (NPV @ 10% hurdle rate)
-  - Internal Rate of Return (IRR via Newton-Raphson approximation)
-  - Discounted payback period
-  - Department budget impact evaluation (Within budget, High utilisation > 90%, Overrun alert)
-- **Workflow Engine (`server/src/tests/workflow.test.ts`)**:
-  - Routing proposals ≤ ₹1 Lakh to HOD approval only
-  - Routing proposals ₹1L – ₹10L to HOD + Technical + Finance
-  - Routing proposals > ₹10 Lakhs to all 5 stages (HOD + Technical + Finance + Procurement + Management)
-  - Explicit custom threshold overrides (`minAmount` / `maxAmount`)
-  - Dynamic condition expression parsing (`amount > 2000000`)
+### Test Coverage Highlights:
+1. **Financial Modeling Engine (`src/tests/financial.test.ts`)**: Total investment, net annual benefit, simple & discounted payback, ROI %, straight-line depreciation, NPV, IRR via Newton-Raphson approximation, and budget overrun warnings.
+2. **Workflow Engine (`src/tests/workflow.test.ts`)**: Dynamic threshold routing (≤ ₹1L HOD only, ₹1L–₹10L HOD+Engineer+Finance, > ₹10L adding Procurement+Management).
+3. **Workflow-as-Data (`src/tests/workflowAsData.test.ts`)**: Dynamic modification of threshold rules in MongoDB database without code changes.
+4. **SLA Escalations (`src/tests/slaEscalation.test.ts`)**: Automatic escalation of overdue review requests.
+5. **Audit Trail Immutability (`src/tests/auditIntegrity.test.ts`)**: Verifies Mongoose pre-hooks strictly block updates and deletions on `AuditLog` and `ProposalVersion`.
+6. **Role-Based Authorization (`src/tests/authorization.test.ts`)**: Proves endpoints return 403 Forbidden on unauthorized roles; role spoofing via request headers or body is blocked.
+7. **Edge Cases (`src/tests/edgeCases.test.ts`)**: Revision snapshots & resubmission, rejection at each stage, delegation expiration, budget overrun blocks, and concurrent approval race condition protection.
+8. **Security & NoSQL Injection Protection (`src/tests/security.test.ts`)**: Bcrypt password hashing, Zod validation, `express-mongo-sanitize` blocking `{"$ne": null}` operator injections, and upload extension filtering.
+9. **Email Notifications (`src/tests/emailNotification.test.ts`)**: Nodemailer SMTP dispatch with graceful fallback to persistent `SimulatedEmail` collection.
+10. **Excel Workbook Exports (`src/tests/excelExport.test.ts`)**: Multi-sheet workbook verification for CAPEX Dashboard and 16-column Proposals Register.
 
 ---
 
-## 🔒 Security & RBAC Implementation
-- **JWT Authentication** with password hashing using bcrypt.
-- **Role-Based Access Control (RBAC)** middleware enforcing server-side authorization checks on every endpoint (`requireRoles(...)`).
-- **File Upload Validation**: Multer storage enforcing strict file type filtering (PDF, Word, Excel, CSV, Images) and a 15 MB file size ceiling.
-- **Immutable Audit Logging**: Every proposal creation, workflow action, delegation, and status transition logs actor ID, action name, before snapshot, and after snapshot.
+## 🔒 Security & Data Integrity
+- **ACID Transactions**: Multi-document atomic transactions ensure consistency across approvals, budgets, POs, and asset creation.
+- **Integer Currency**: Currency figures are rounded and stored as whole numbers in the smallest currency unit to prevent floating-point anomalies.
+- **Append-Only Auditing**: Mongoose middleware pre-hooks reject updates and deletions on historical logs.
+- **NoSQL Injection Sanitization**: Sanitization middleware + strict Zod schema validation.
 
 ---
 
