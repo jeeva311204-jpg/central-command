@@ -441,44 +441,56 @@ export function Dashboard() {
             </div>
           </div>
 
-          {/* KPI Ribbon */}
+          {/* KPI Ribbon with Visual Highlights */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 shadow-sm">
-              <div className="text-xs font-semibold text-industrial-500 uppercase">Total Approved Spend</div>
+            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border-2 border-emerald-500/30 dark:border-emerald-500/20 shadow-lg shadow-emerald-500/5 relative overflow-hidden group">
+              <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono tracking-wider border border-emerald-500/20">
+                CAPEX SPEND
+              </div>
+              <div className="text-xs font-semibold text-industrial-500 uppercase tracking-wide">Total Approved Spend</div>
               <div className="text-2xl font-black text-industrial-900 dark:text-white mt-1">
                 ₹{((capexData?.kpis?.approvedSpend || 4520000) / 100000).toFixed(1)} Lakhs
               </div>
-              <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">
+              <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1 font-medium">
                 Allocated: ₹{((capexData?.kpis?.totalBudget || 12000000) / 100000).toFixed(1)}L
               </div>
             </div>
 
-            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 shadow-sm">
-              <div className="text-xs font-semibold text-industrial-500 uppercase">Board Sanction Queue</div>
+            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border-2 border-amber-500/30 dark:border-amber-500/20 shadow-lg shadow-amber-500/5 relative overflow-hidden group">
+              <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono tracking-wider border border-amber-500/20">
+                BOARD QUEUE
+              </div>
+              <div className="text-xs font-semibold text-industrial-500 uppercase tracking-wide">Board Sanction Queue</div>
               <div className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">
                 {pendingApprovals.length > 0 ? pendingApprovals.length : 3} Proposals
               </div>
-              <div className="text-xs text-industrial-500 mt-1">
+              <div className="text-xs text-industrial-500 mt-1 font-medium">
                 Escalated by Department Managers
               </div>
             </div>
 
-            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 shadow-sm">
-              <div className="text-xs font-semibold text-industrial-500 uppercase">Staff Daily Checklists</div>
+            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border-2 border-brand-500/30 dark:border-brand-500/20 shadow-lg shadow-brand-500/5 relative overflow-hidden group">
+              <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-brand-500/10 text-brand-600 dark:text-brand-400 font-mono tracking-wider border border-brand-500/20">
+                SHIFT GOVERNANCE
+              </div>
+              <div className="text-xs font-semibold text-industrial-500 uppercase tracking-wide">Staff Daily Checklists</div>
               <div className="text-2xl font-black text-brand-600 dark:text-brand-400 mt-1">
                 {checklistAnalytics?.avgCompletion || 78}% Completion
               </div>
-              <div className="text-xs text-industrial-500 mt-1">
+              <div className="text-xs text-industrial-500 mt-1 font-medium">
                 {checklistAnalytics?.completedCount || 14} / {checklistAnalytics?.totalSubmissions || 18} Shifts Compliant
               </div>
             </div>
 
-            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 shadow-sm">
-              <div className="text-xs font-semibold text-industrial-500 uppercase">Performance Alerts</div>
+            <div className="p-5 rounded-2xl bg-white dark:bg-industrial-900 border-2 border-rose-500/30 dark:border-rose-500/20 shadow-lg shadow-rose-500/5 relative overflow-hidden group">
+              <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-rose-500/10 text-rose-600 dark:text-rose-400 font-mono tracking-wider border border-rose-500/20 animate-pulse">
+                SLA ALERT &lt;50%
+              </div>
+              <div className="text-xs font-semibold text-industrial-500 uppercase tracking-wide">Performance Alerts</div>
               <div className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-1">
                 {checklistAnalytics?.lowPerformanceCount || 1} Low Performers
               </div>
-              <div className="text-xs text-rose-500 mt-1">
+              <div className="text-xs text-rose-500 mt-1 font-medium">
                 Eligible for Disciplinary Review
               </div>
             </div>
@@ -700,11 +712,14 @@ export function Dashboard() {
             </div>
           </div>
 
-          {/* Manager's Daily Checklist */}
+          {/* Manager's Daily Checklist with Visual Highlights */}
           {todayChecklist && (
-            <div className="p-6 rounded-2xl bg-white dark:bg-industrial-900 border border-industrial-200 dark:border-industrial-800 shadow-sm space-y-4">
+            <div className="p-6 rounded-2xl bg-white dark:bg-industrial-900 border-2 border-indigo-500/40 shadow-xl shadow-indigo-500/5 space-y-4 relative overflow-hidden">
               <div className="flex items-center justify-between">
                 <div>
+                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-mono tracking-wider mb-1 border border-indigo-500/20">
+                    MANDATORY DAILY SHIFT GOVERNANCE
+                  </div>
                   <h3 className="text-base font-bold text-industrial-900 dark:text-white flex items-center gap-2">
                     <CheckSquare className="w-5 h-5 text-indigo-600" />
                     <span>Manager Daily Governance Checklist</span>
