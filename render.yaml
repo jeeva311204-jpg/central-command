@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: changeflow-enterprise
+    runtime: node
+    plan: standard
+    buildCommand: npm install && npm --prefix server install && npm --prefix client install && npm --prefix server run prisma:generate && npm run build
+    startCommand: node server/dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        value: file:./server/prisma/dev.db
+      - key: SLA_CRON_SCHEDULE
+        value: "0 * * * *"
+    disk:
+      name: changeflow-data
+      mountPath: /data
+      sizeGB: 10

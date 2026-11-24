@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  changeflow-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: changeflow_enterprise
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - JWT_SECRET=changeflow-prod-jwt-secret-key-32chars-minimum-required!
+      - DATABASE_URL=file:/app/server/prisma/dev.db
+      - SLA_CRON_SCHEDULE=0 * * * *
+      # Optional SMTP configuration for live outbound emails
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-ChangeFlow Enterprise <alerts@changeflow.enterprise>}
+    volumes:
+      - changeflow_db:/app/server/prisma
+      - changeflow_uploads:/app/uploads
+
+volumes:
+  changeflow_db:
+    driver: local
+  changeflow_uploads:
+    driver: local
