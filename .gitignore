@@ -46,8 +46,10 @@ pnpm-debug.log*
 # Video production scratch folders
 video_production/
 video_production_detailed/
+video_production_extended/
 demo_captures/
 demo_captures_detailed/
+demo_captures_extended/
 mobile_captures/
 test_mobile_captures.cjs
 check_db.cjs
