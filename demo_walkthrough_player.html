@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChangeFlow Enterprise - Complete Interactive Video Walkthrough</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #030712;
+      color: #f9fafb;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      background: #0f172a;
+      border-bottom: 1px solid #1e293b;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .badge {
+      background: #1e3a8a;
+      color: #93c5fd;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .main-stage {
+      flex: 1;
+      display: flex;
+      position: relative;
+      background: #020617;
+      overflow: hidden;
+    }
+    .video-viewport {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .screen-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      transition: opacity 0.3s ease;
+    }
+    .caption-overlay {
+      position: absolute;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(51, 65, 85, 0.8);
+      backdrop-filter: blur(12px);
+      padding: 12px 24px;
+      border-radius: 16px;
+      max-width: 800px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .caption-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #38bdf8;
+      margin-bottom: 4px;
+    }
+    .caption-desc {
+      font-size: 12px;
+      color: #cbd5e1;
+      line-height: 1.4;
+    }
+    .sidebar-chapters {
+      width: 320px;
+      background: #090d16;
+      border-left: 1px solid #1e293b;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .chapters-header {
+      padding: 14px 16px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid #1e293b;
+    }
+    .chapter-item {
+      padding: 12px 16px;
+      border-bottom: 1px solid #111827;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .chapter-item:hover {
+      background: #1e293b;
+    }
+    .chapter-item.active {
+      background: #1e1b4b;
+      border-left: 4px solid #6366f1;
+    }
+    .chapter-thumb {
+      width: 64px;
+      height: 36px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid #334155;
+    }
+    .chapter-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .chapter-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #f1f5f9;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chapter-sub {
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 2px;
+    }
+    .controls-bar {
+      background: #0f172a;
+      border-top: 1px solid #1e293b;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .play-btn {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .play-btn:hover { background: #1d4ed8; }
+    .progress-track {
+      flex: 1;
+      height: 6px;
+      background: #1e293b;
+      border-radius: 999px;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #6366f1);
+      width: 0%;
+      transition: width 0.2s linear;
+    }
+    .time-display {
+      font-size: 11px;
+      font-family: monospace;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <span>⚙️ ChangeFlow Enterprise</span>
+      <span class="badge">Screen Recorded Demonstration</span>
+    </div>
+    <div style="font-size: 12px; color: #94a3b8;">
+      16 High-Resolution 1920x1080 Panels • All 9 Roles & Dashboards
+    </div>
+  </header>
+
+  <div class="main-stage">
+    <div class="video-viewport">
+      <img id="currentImage" class="screen-img" src="demo_captures/frame_01.png" alt="Walkthrough Screen">
+      <div class="caption-overlay">
+        <div id="captionTitle" class="caption-title">Loading demonstration...</div>
+        <div id="captionDesc" class="caption-desc">Please wait...</div>
+      </div>
+    </div>
+
+    <div class="sidebar-chapters">
+      <div class="chapters-header">Demonstration Chapters</div>
+      <div id="chaptersList"></div>
+    </div>
+  </div>
+
+  <div class="controls-bar">
+    <button id="playPauseBtn" class="play-btn" onclick="togglePlay()">Pause</button>
+    <div class="progress-track" onclick="scrub(event)">
+      <div id="progressFill" class="progress-fill"></div>
+    </div>
+    <div id="timeDisplay" class="time-display">1 / 16</div>
+    <button class="play-btn" style="background: #334155;" onclick="prevSlide()">◀ Prev</button>
+    <button class="play-btn" style="background: #334155;" onclick="nextSlide()">Next ▶</button>
+  </div>
+
+  <script>
+    const slides = [
+      {
+        src: 'demo_captures/frame_01.png',
+        title: 'Act 1: Modern Landing Page Hero',
+        desc: 'Unified 4M Change Control & CAPEX Automation platform hero section, real-time stats and entry points.'
+      },
+      {
+        src: 'demo_captures/frame_02.png',
+        title: 'Act 1: Enterprise Architecture Pillars',
+        desc: 'The four operational pillars: 4M Change Governance, Workflow Engine, Financial Evaluation & Procurement.'
+      },
+      {
+        src: 'demo_captures/frame_03.png',
+        title: 'Act 1: Login & Instant 1-Click Demo Personas',
+        desc: 'Fast role-switching for all 9 industrial roles (Aditya Birla, Rajesh Sharma, Engineers, Operators).'
+      },
+      {
+        src: 'demo_captures/frame_04.png',
+        title: 'Act 2: Executive Board & Management Command Center',
+        desc: 'Aditya Birla executive view: global CAPEX allocations, board sanction queue, and enterprise staff compliance.'
+      },
+      {
+        src: 'demo_captures/frame_05.png',
+        title: 'Act 2: Industrial Departments & Assigned HODs Matrix',
+        desc: 'Organizational hierarchy management: Board/Management appoints and oversees Department Managers.'
+      },
+      {
+        src: 'demo_captures/frame_06.png',
+        title: 'Act 2: Low Performance Staff & Disciplinary Warning System',
+        desc: 'Automated flagging of staff with <50% shift compliance with 1-click Warning / Termination letter issuance.'
+      },
+      {
+        src: 'demo_captures/frame_07.png',
+        title: 'Act 3: Department Manager (HOD) Command Center & Checklists',
+        desc: 'Rajesh Sharma production HOD view: daily manager governance checklist for shift output and EHS audits.'
+      },
+      {
+        src: 'demo_captures/frame_08.png',
+        title: 'Act 3: Department Staff Proposals Review Queue',
+        desc: 'Equipment & 4M change requisitions raised by operators and engineers queued for manager review and escalation.'
+      },
+      {
+        src: 'demo_captures/frame_09.png',
+        title: 'Act 4: Shopfloor Operator Workspace & Daily Shift Checklist',
+        desc: 'Rahul Singh operator view: daily operational shift checklist (Job Done, Milestone, Cycle Time, 5S Safety).'
+      },
+      {
+        src: 'demo_captures/frame_10.png',
+        title: 'Act 4: Engineering Specialist Workspace & CAD/Dev Checklist',
+        desc: 'Ananya Verma tooling view: CAD dev specifications, CPK tolerance analysis, and prototype trial signoffs.'
+      },
+      {
+        src: 'demo_captures/frame_11.png',
+        title: 'Act 4: Plant Maintenance Workspace & PM Schedules',
+        desc: 'Manoj Kumar maintenance view: preventive maintenance schedules, breakdown logs, and critical spare parts.'
+      },
+      {
+        src: 'demo_captures/frame_12.png',
+        title: 'Act 4: Finance Controller Workspace & DCF/NPV Viability',
+        desc: 'Vikram Patel finance view: live Net Present Value (NPV), Internal Rate of Return (IRR), and budget limits.'
+      },
+      {
+        src: 'demo_captures/frame_13.png',
+        title: 'Act 5: 4M Change Management & Dynamic 5x5 Risk Matrix',
+        desc: 'Logging Man, Machine, Material, and Method changes with real-time severity and probability risk scoring.'
+      },
+      {
+        src: 'demo_captures/frame_14.png',
+        title: 'Act 5: Multi-Vendor Quotation Comparison & Weighted Scoring',
+        desc: 'Side-by-side vendor bid analysis across price, warranty, capacity, power, and vendor reliability.'
+      },
+      {
+        src: 'demo_captures/frame_15.png',
+        title: 'Act 5: Machine Comparison Matrix with Row Value Highlights',
+        desc: 'Side-by-side technical benchmarks comparing 2 to 4 machines with automatic best-value row highlights.'
+      },
+      {
+        src: 'demo_captures/frame_16.png',
+        title: 'Act 5: Commissioned Asset Register & Maintenance Schedules',
+        desc: 'Auto-registered equipment post-commissioning with serial numbers, warranty alerts, and preventive maintenance.'
+      }
+    ];
+
+    let currentIndex = 0;
+    let isPlaying = true;
+    let timer = null;
+    const SLIDE_DURATION = 3500;
+
+    function renderChapters() {
+      const container = document.getElementById('chaptersList');
+      container.innerHTML = '';
+      slides.forEach((slide, i) => {
+        const item = document.createElement('div');
+        item.className = 'chapter-item' + (i === currentIndex ? ' active' : '');
+        item.onclick = () => goToSlide(i);
+        item.innerHTML = `
+          <img class="chapter-thumb" src="${slide.src}" alt="${slide.title}">
+          <div class="chapter-info">
+            <div class="chapter-title">${slide.title}</div>
+            <div class="chapter-sub">Slide ${i + 1} of ${slides.length}</div>
+          </div>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    function updateView() {
+      const slide = slides[currentIndex];
+      const img = document.getElementById('currentImage');
+      img.style.opacity = '0.3';
+      setTimeout(() => {
+        img.src = slide.src;
+        img.style.opacity = '1';
+      }, 150);
+
+      document.getElementById('captionTitle').innerText = slide.title;
+      document.getElementById('captionDesc').innerText = slide.desc;
+      document.getElementById('timeDisplay').innerText = `${currentIndex + 1} / ${slides.length}`;
+      document.getElementById('progressFill').style.width = `${((currentIndex + 1) / slides.length) * 100}%`;
+      renderChapters();
+    }
+
+    function nextSlide() {
+      currentIndex = (currentIndex + 1) % slides.length;
+      updateView();
+    }
+
+    function prevSlide() {
+      currentIndex = (currentIndex - 1 + slides.length) % slides.length;
+      updateView();
+    }
+
+    function goToSlide(index) {
+      currentIndex = index;
+      updateView();
+    }
+
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      document.getElementById('playPauseBtn').innerText = isPlaying ? 'Pause' : 'Play';
+      if (isPlaying) {
+        startTimer();
+      } else {
+        clearInterval(timer);
+      }
+    }
+
+    function startTimer() {
+      clearInterval(timer);
+      timer = setInterval(() => {
+        if (isPlaying) nextSlide();
+      }, SLIDE_DURATION);
+    }
+
+    function scrub(e) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pos = (e.clientX - rect.left) / rect.width;
+      currentIndex = Math.floor(pos * slides.length);
+      updateView();
+    }
+
+    // Initialize
+    updateView();
+    startTimer();
+  </script>
+</body>
+</html>
