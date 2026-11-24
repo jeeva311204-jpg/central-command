@@ -43,4 +43,9 @@ pnpm-debug.log*
 *.sln
 *.sw?
 .DS_Store
-Thumbs.db
+# Video production scratch folders
+video_production/
+video_production_detailed/
+demo_captures/
+demo_captures_detailed/
+check_db.cjs
