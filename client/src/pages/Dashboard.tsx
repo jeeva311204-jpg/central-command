@@ -102,10 +102,14 @@ const DEFAULT_ROLE_CHECKLISTS: Record<string, { id: string; label: string }[]> =
 };
 
 function getFallbackChecklist(roleName: string) {
-  const items = DEFAULT_ROLE_CHECKLISTS[roleName] || DEFAULT_ROLE_CHECKLISTS['Employee'];
+  const normalizedKey =
+    Object.keys(DEFAULT_ROLE_CHECKLISTS).find(
+      (k) => k.toLowerCase() === (roleName || '').toLowerCase()
+    ) || 'Employee';
+  const items = DEFAULT_ROLE_CHECKLISTS[normalizedKey] || DEFAULT_ROLE_CHECKLISTS['Employee'];
   return {
     date: new Date().toISOString().split('T')[0],
-    roleName,
+    roleName: normalizedKey,
     completionRate: 40,
     items: items.map((t, idx) => ({
       id: t.id,
@@ -126,8 +130,20 @@ export function Dashboard() {
   const role = roleName.trim();
   const roleLower = role.toLowerCase();
 
-  const isExecutive = roleLower.includes('manage') || roleLower.includes('admin') || roleLower.includes('board') || roleLower.includes('director');
-  const isHOD = roleLower.includes('hod') || roleLower.includes('head') || (roleLower.includes('manager') && !isExecutive);
+  const isHOD =
+    roleLower === 'hod' ||
+    roleLower.includes('head of department') ||
+    roleLower.includes('department manager') ||
+    (roleLower.includes('manager') && !roleLower.includes('management'));
+
+  const isExecutive =
+    !isHOD &&
+    (roleLower.includes('management') ||
+      roleLower.includes('admin') ||
+      roleLower.includes('board') ||
+      roleLower.includes('director') ||
+      roleLower === 'executive');
+
   const isSpecialist = !isExecutive && !isHOD;
 
   // Granular specialist flags
@@ -138,8 +154,8 @@ export function Dashboard() {
   const isProcurement = roleLower.includes('procure') || roleLower.includes('scm');
   const isOperator = !isEngineer && !isMaintenance && !isFinance && !isQuality && !isProcurement;
 
-  // Common State
-  const [loading, setLoading] = useState(true);
+  // Common State (non-blocking: pre-loaded with instant fallback data)
+  const [loading, setLoading] = useState(false);
   const [notices, setNotices] = useState<any[]>([]);
   const [todayChecklist, setTodayChecklist] = useState<any>(() => getFallbackChecklist(role));
   const [checklistAnalytics, setChecklistAnalytics] = useState<any>(null);
@@ -171,80 +187,55 @@ export function Dashboard() {
 
   const loadData = async () => {
     try {
-      // 1. Load user's notices independently
-      try {
-        const myNotices = await api.getPerformanceNotices();
-        if (Array.isArray(myNotices)) setNotices(myNotices);
-      } catch (e) {
-        console.warn('Notice fetch error:', e);
-      }
+      // Parallel non-blocking sync
+      const [noticesRes, checklistRes, orgRes, analyticsRes, proposalsRes, capexRes] =
+        await Promise.allSettled([
+          api.getPerformanceNotices(),
+          api.getTodayChecklist(),
+          api.getOrgTree(),
+          api.getChecklistAnalytics(),
+          api.getProposals(),
+          isExecutive ? api.getCapexMetrics() : Promise.resolve(null),
+        ]);
 
-      // 2. Load today's role checklist independently
-      try {
-        const cl = await api.getTodayChecklist();
-        if (cl && cl.items && cl.items.length > 0) {
-          setTodayChecklist(cl);
-        } else {
-          setTodayChecklist(getFallbackChecklist(role));
-        }
-      } catch (e) {
-        setTodayChecklist(getFallbackChecklist(role));
+      if (noticesRes.status === 'fulfilled' && Array.isArray(noticesRes.value)) {
+        setNotices(noticesRes.value);
       }
-
-      // 3. Load Org Tree independently
-      try {
-        const org = await api.getOrgTree();
-        if (org && org.departments) setOrgTree(org);
-      } catch (e) {
-        console.warn('Org tree fetch error:', e);
+      if (checklistRes.status === 'fulfilled' && checklistRes.value?.items?.length) {
+        setTodayChecklist(checklistRes.value);
       }
-
-      // 4. Load Checklist Analytics independently
-      try {
-        const clAnalytics = await api.getChecklistAnalytics();
-        if (clAnalytics) setChecklistAnalytics(clAnalytics);
-      } catch (e) {
-        console.warn('Checklist analytics fetch error:', e);
+      if (orgRes.status === 'fulfilled' && orgRes.value?.departments) {
+        setOrgTree(orgRes.value);
       }
-
-      // 5. Load proposals independently
-      try {
-        const proposals = await api.getProposals();
-        if (Array.isArray(proposals)) {
-          setAllProposals(proposals);
-          const userId = user?.id;
-          setMyProposals(
-            proposals.filter(
-              (p: any) =>
-                p.initiatorId === userId ||
-                p.initiator?._id === userId ||
-                p.initiator?.id === userId
-            )
-          );
-          setPendingApprovals(
-            proposals.filter(
-              (p: any) =>
-                p.status === 'UNDER_EVALUATION' ||
-                p.status === 'SUBMITTED' ||
-                p.status === 'IN_PROGRESS'
-            )
-          );
-        }
-      } catch (e) {
-        console.warn('Proposals fetch error:', e);
+      if (analyticsRes.status === 'fulfilled' && analyticsRes.value) {
+        setChecklistAnalytics(analyticsRes.value);
       }
-
-      // 6. Load CAPEX metrics independently
-      try {
-        const capex = await api.getCapexMetrics();
-        if (capex) setCapexData(capex);
-      } catch (e) {
-        console.warn('CAPEX metrics fetch error:', e);
+      if (proposalsRes.status === 'fulfilled' && Array.isArray(proposalsRes.value)) {
+        const proposals = proposalsRes.value;
+        setAllProposals(proposals);
+        const userId = user?.id;
+        setMyProposals(
+          proposals.filter(
+            (p: any) =>
+              p.initiatorId === userId ||
+              p.initiator?._id === userId ||
+              p.initiator?.id === userId
+          )
+        );
+        setPendingApprovals(
+          proposals.filter(
+            (p: any) =>
+              p.status === 'UNDER_EVALUATION' ||
+              p.status === 'SUBMITTED' ||
+              p.status === 'IN_PROGRESS'
+          )
+        );
+      }
+      if (capexRes.status === 'fulfilled' && capexRes.value) {
+        setCapexData(capexRes.value);
       }
     } catch (err) {
-      console.error('Dashboard general load error:', err);
-    } finally {
-      setLoading(false);
+      console.warn('Dashboard sync note:', err);
     }
   };
 
@@ -336,14 +327,6 @@ export function Dashboard() {
       setActionError(err.message || 'Failed to assign staff');
     }
   };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600"></div>
-      </div>
-    );
-  }
 
   // Active Disciplinary / Termination Notices for the logged-in user
   const unacknowledgedNotices = notices.filter(
