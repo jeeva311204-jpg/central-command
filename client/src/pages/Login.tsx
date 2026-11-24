@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Layers, ShieldCheck, ArrowRight, UserCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -58,6 +58,11 @@ export function Login() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-brand-500/10 blur-[140px] pointer-events-none rounded-full" />
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10 text-center">
+        <div className="mb-2">
+          <Link to="/welcome" className="inline-flex items-center gap-1.5 text-xs text-industrial-400 hover:text-white transition-colors">
+            ← Back to Product Overview
+          </Link>
+        </div>
         <div className="inline-flex p-3 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 shadow-xl shadow-brand-500/25 mb-4">
           <Layers className="w-8 h-8 text-white" />
         </div>

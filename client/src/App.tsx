@@ -6,6 +6,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 
+import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { ProposalsList } from './pages/Proposals/ProposalsList';
@@ -38,7 +39,7 @@ function ProtectedLayout() {
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/welcome" replace />;
   }
 
   return (
@@ -60,6 +61,8 @@ export function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
+            <Route path="/welcome" element={<Landing />} />
+            <Route path="/landing" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route element={<ProtectedLayout />}>
               <Route path="/" element={<Dashboard />} />

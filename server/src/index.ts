@@ -2,11 +2,15 @@ import { app } from './app';
 import { config } from './config';
 import { connectDB, disconnectDB } from './db';
 import { startScheduler, stopScheduler } from './services/scheduler';
+import { ensureBaselineData } from './services/bootstrapData';
 
 async function bootstrap() {
   try {
     await connectDB();
     console.log('✅ Connected to MongoDB database successfully.');
+
+    // Ensure baseline roles, departments, and demo personas exist on fresh databases
+    await ensureBaselineData();
 
     const server = app.listen(config.port, () => {
       console.log(`🚀 ChangeFlow Enterprise Server running on http://localhost:${config.port}`);
