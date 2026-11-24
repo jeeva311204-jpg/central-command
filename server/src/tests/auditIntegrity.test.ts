@@ -126,7 +126,7 @@ describe('Item 3: Audit Integrity & Immutability Test', () => {
       updateError = err;
     }
     expect(updateError).not.toBeNull();
-    expect(updateError.message).toContain('AuditLog is immutable and cannot be updated');
+    expect(updateError.message).toContain('AuditLog is an immutable append-only ledger');
   });
 
   it('enforces model-level pre-hook blocking any deletion of AuditLog', async () => {
@@ -137,7 +137,7 @@ describe('Item 3: Audit Integrity & Immutability Test', () => {
       deleteError = err;
     }
     expect(deleteError).not.toBeNull();
-    expect(deleteError.message).toContain('AuditLog is immutable and cannot be deleted');
+    expect(deleteError.message).toContain('AuditLog is an immutable append-only ledger');
   });
 
   it('enforces model-level pre-hook blocking any modification to ProposalVersion', async () => {
@@ -148,7 +148,7 @@ describe('Item 3: Audit Integrity & Immutability Test', () => {
       updateError = err;
     }
     expect(updateError).not.toBeNull();
-    expect(updateError.message).toContain('ProposalVersion is immutable and cannot be updated');
+    expect(updateError.message).toContain('ProposalVersion is immutable and append-only');
   });
 
   it('enforces model-level pre-hook blocking any deletion of ProposalVersion', async () => {
@@ -159,6 +159,6 @@ describe('Item 3: Audit Integrity & Immutability Test', () => {
       deleteError = err;
     }
     expect(deleteError).not.toBeNull();
-    expect(deleteError.message).toContain('ProposalVersion is immutable and cannot be deleted');
+    expect(deleteError.message).toContain('ProposalVersion is immutable and append-only');
   });
 });

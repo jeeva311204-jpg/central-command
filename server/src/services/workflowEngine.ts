@@ -572,7 +572,7 @@ export async function runSLACheckAndEscalations() {
           manager.email,
           manager.name,
           `[ChangeFlow ESCALATION] SLA Breach on ${proposal.proposalNumber}`,
-          `<p>Proposal <strong>${proposal.proposalNumber}</strong> in Department <strong>${dept?.name || 'Operations'}</strong> has breached its SLA of ${slaDays} days.</p><p>Current Stage: ${currentStage.name}</p><p>Days pending: ${stageAgeDays.toFixed(1)} days</p>`,
+          `<p>Proposal <strong>${proposal.proposalNumber}</strong> in Department <strong>${dept?.name || 'Operations'}</strong> has breached its SLA of ${slaDays} days (${(stageAgeDays - slaDays).toFixed(1)} days overdue).</p><p>Current Stage: ${currentStage.name}</p><p>Days pending: ${stageAgeDays.toFixed(1)} days</p>`,
           'SLA_ESCALATION'
         );
       }

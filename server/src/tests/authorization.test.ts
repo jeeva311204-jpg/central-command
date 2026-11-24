@@ -91,6 +91,7 @@ describe('Item 4: Role-Based Authorization & JWT Role Tamper Resistance Test', (
       poNumber: `PO-AUTH-${Date.now()}`,
       proposalId: proposal._id,
       vendorId: vendor._id,
+      createdById: employeeUser._id,
       totalAmount: 500000,
       status: 'CREATED',
     });
